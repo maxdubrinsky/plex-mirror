@@ -1,0 +1,190 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/maxdubrinsky/plex-mirror/internal/source"
+)
+
+// BrowsePage is the full browse view. The source/library picker now lives in the
+// persistent sidebar (see @sidebar); this page renders the selected library's
+// items — its title, the filter box, the view toggle, and the results — or a
+// landing hint when nothing is selected yet.
+templ BrowsePage(meta PageMeta, vm BrowseVM) {
+	@Layout(meta) {
+		if vm.Source != "" && vm.Library != "" {
+			<h1>{ vm.LibraryTitle }</h1>
+			@errNotice(vm.Err)
+			<div class="panel">
+				<div class="row spread browse-controls">
+					<input
+						class="search"
+						type="search"
+						name="filter"
+						placeholder="Filter titles…"
+						value={ vm.Filter }
+						aria-label="Filter titles"
+						hx-get={ browseSearchURL(vm) }
+						hx-trigger="input changed delay:400ms, search"
+						hx-target="#results"
+						hx-swap="outerHTML"
+					/>
+					@viewToggle(vm, false)
+				</div>
+				@Results(vm)
+			</div>
+		} else {
+			<h1>Browse</h1>
+			@errNotice(vm.Err)
+			<div class="panel">
+				<div class="empty">
+					Pick a library from the sidebar to browse its items.
+					if len(vm.Sources) == 0 {
+						<span class="hint">No sources configured yet — add Plex / Jellyfin credentials in <a href="/settings">Settings</a>.</span>
+					}
+				</div>
+			</div>
+		}
+	}
+}
+
+// viewToggle switches the results between the card grid and a dense table. Each
+// button swaps just #results (and the handler pushes the canonical URL). It lives
+// outside #results to preserve focus, so the fragment response re-emits it as an
+// out-of-band swap (oob=true) to keep the active highlight in sync.
+templ viewToggle(vm BrowseVM, oob bool) {
+	<div
+		id="view-toggle"
+		class="vtoggle-group"
+		role="group"
+		aria-label="View mode"
+		if oob {
+			hx-swap-oob="true"
+		}
+	>
+		<button
+			class={ viewToggleClass(vm.View != "table") }
+			title="Card view"
+			aria-label="Card view"
+			hx-get={ browseViewURL(vm, "card") }
+			hx-target="#results"
+			hx-swap="outerHTML"
+		>▦</button>
+		<button
+			class={ viewToggleClass(vm.View == "table") }
+			title="Table view"
+			aria-label="Table view"
+			hx-get={ browseViewURL(vm, "table") }
+			hx-target="#results"
+			hx-swap="outerHTML"
+		>▤</button>
+	</div>
+}
+
+// BrowseItemsFragment is the /browse/items response: the swapped #results plus an
+// out-of-band refresh of #view-toggle so its active highlight tracks the rendered
+// mode after a card/table switch.
+templ BrowseItemsFragment(vm BrowseVM) {
+	@Results(vm)
+	@viewToggle(vm, true)
+}
+
+// Results is the swappable items region: the card grid (or table) plus the pager.
+// The search box and view toggle live outside it so they keep focus/state across
+// swaps.
+templ Results(vm BrowseVM) {
+	<div id="results">
+		if len(vm.Items) == 0 {
+			<div class="empty">
+				No items match.
+				if vm.Filter != "" {
+					<span class="hint">Try a different filter or clear the search.</span>
+				}
+			</div>
+		} else {
+			if vm.View == "table" {
+				@itemTable(vm)
+			} else {
+				<div class="grid">
+					for _, it := range vm.Items {
+						@itemCard(vm, it)
+					}
+				</div>
+			}
+			@pager(vm)
+		}
+	</div>
+}
+
+// itemTable is the dense table rendering of a library page. The last column is
+// the shared ActionCell (status badge + Queue + Details), so its #act-<id> swap
+// target — and queue/cancel behavior — works identically to the card grid.
+templ itemTable(vm BrowseVM) {
+	<div class="table-wrap">
+		<table class="responsive items-table">
+			<thead>
+				<tr>
+					<th>Title</th>
+					<th style="width:90px">Kind</th>
+					<th style="width:80px">Year</th>
+					<th style="width:100px">Size</th>
+					<th style="width:200px"></th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, it := range vm.Items {
+					<tr>
+						<td data-label="Title">{ it.Title }</td>
+						<td data-label="Kind" class="muted">{ kindLabel(string(it.Kind)) }</td>
+						<td data-label="Year" class="mono muted">{ yearLabel(it.Year) }</td>
+						<td data-label="Size" class="mono">{ HumanBytes(it.SizeBytes) }</td>
+						<td data-label="">
+							@ActionCell(vm.Source, it.ID, it.Container, vm.Downloadable, vm.status(it.ID))
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+templ itemCard(vm BrowseVM, it source.Item) {
+	<div class="card">
+		<div class="title">{ it.Title }</div>
+		<div class="meta">{ itemMeta(it) }</div>
+		@ActionCell(vm.Source, it.ID, it.Container, vm.Downloadable, vm.status(it.ID))
+	</div>
+}
+
+// ActionCell is rendered both on first paint and as the hx-post /queue response,
+// so queueing an item swaps just this cell to its new state.
+templ ActionCell(srcName, itemID, container string, downloadable bool, status string) {
+	<div id={ "act-" + itemID } class="actions">
+		if status != "" {
+			<span class={ StatusClass(status) }>{ status }</span>
+		}
+		if canQueue(downloadable, status, container) {
+			<button
+				class="btn btn-primary"
+				hx-post={ queueURL(srcName, itemID) }
+				hx-target={ "#act-" + itemID }
+				hx-swap="outerHTML"
+			>Queue</button>
+		}
+		<a class="btn small" href={ itemHref(srcName, itemID) }>Details</a>
+	</div>
+}
+
+templ pager(vm BrowseVM) {
+	<div class="row spread" style="margin-top:14px">
+		<span class="muted small">Page { fmt.Sprintf("%d", vm.pageNum()) }</span>
+		<div class="row">
+			if vm.Offset > 0 {
+				<button class="btn small" hx-get={ browseItemsURL(vm, vm.prevOffset()) } hx-target="#results" hx-swap="outerHTML">‹ Prev</button>
+			}
+			if vm.HasMore {
+				<button class="btn small" hx-get={ browseItemsURL(vm, vm.nextOffset()) } hx-target="#results" hx-swap="outerHTML">Next ›</button>
+			}
+		</div>
+	</div>
+}

@@ -1,0 +1,218 @@
+package views
+
+// Layout is the full-page shell. Structure:
+//
+//	topbar (persistent — brand, queue button + live count, settings, sign out)
+//	#shell  ← the boosted-nav swap target (sidebar + #content)
+//	  sidebar  (sources → libraries rail)
+//	  #content (the page body)
+//	queue drawer (persistent overlay, polled while open)
+//
+// Navigation links inside the topbar/sidebar/breadcrumb carry hx-boost + a swap
+// of #shell, so clicking a library re-renders the rail (active highlight) and the
+// main region together while pushing the URL, leaving the topbar + drawer (and
+// their polling) untouched. Boost is scoped to those nav containers — never the
+// body — so hx-select="#shell" can't leak into the fragment action buttons.
+templ Layout(meta PageMeta) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ meta.Title } · plex-mirror</title>
+			<link rel="preload" href="/static/fonts/ibm-plex-sans-latin-400.woff2" as="font" type="font/woff2" crossorigin/>
+			<link rel="preload" href="/static/fonts/ibm-plex-mono-latin-400.woff2" as="font" type="font/woff2" crossorigin/>
+			<link rel="stylesheet" href="/static/app.css"/>
+			<script src="/static/htmx.min.js"></script>
+		</head>
+		<body>
+			<div id="top-progress"></div>
+			<a class="skip-link" href="#content">Skip to content</a>
+			@topbar(meta)
+			<div id="shell" class="shell" hx-history-elt>
+				@sidebar(meta)
+				<main id="content">
+					{ children... }
+				</main>
+			</div>
+			@queueDrawer()
+			@portalScript()
+		</body>
+	</html>
+}
+
+// topbar is persistent (outside #shell): the brand/home link, the queue drawer
+// trigger with its 5s-polled in-flight count, the settings gear, and sign out.
+templ topbar(meta PageMeta) {
+	<header class="topbar">
+		<button class="hamburger" type="button" aria-label="Toggle library menu" aria-controls="sidebar" aria-expanded="false" onclick="pmToggleSidebar()">≡</button>
+		<a class="brand" href="/browse" hx-boost="true" hx-target="#shell" hx-select="#shell" hx-swap="outerHTML">plex-mirror</a>
+		<span class="spacer"></span>
+		<button class="qbtn" type="button" aria-haspopup="dialog" aria-controls="queue-drawer" onclick="pmToggleQueue()">
+			Queue
+			<span id="queue-count" class="qcount" hx-get="/queue/count" hx-trigger="load, every 5s" hx-swap="innerHTML"></span>
+		</button>
+		// Settings is a deliberate full-page nav (not boosted): a full load re-renders
+		// the topbar so the gear's active highlight is correct (the topbar lives
+		// outside #shell and a boosted swap wouldn't refresh it).
+		<a class={ iconClass(meta.Active == "settings") } href="/settings" title="Settings" aria-label="Settings">⚙</a>
+		if meta.AuthEnabled {
+			<a class="logout" href="/logout" hx-boost="false">Sign out</a>
+		}
+	</header>
+}
+
+// sidebar is the library rail: one group per source, libraries beneath, the
+// active one highlighted. A per-source error degrades to an inline note instead
+// of breaking the page. The whole rail is a boosted nav region targeting #shell.
+templ sidebar(meta PageMeta) {
+	<nav id="sidebar" class="sidebar" aria-label="Library navigation" hx-boost="true" hx-target="#shell" hx-select="#shell" hx-swap="outerHTML">
+		<div class="nav-scroll">
+			for _, src := range meta.Nav {
+				<div class="nav-group">
+					<div class="nav-group-head">
+						<span class="nav-source">{ src.Name }</span>
+						if src.Downloadable {
+							<span class="nav-dl" aria-hidden="true" title="downloadable">↓</span>
+							<span class="sr-only">downloadable</span>
+						}
+					</div>
+					if src.Err != "" {
+						<div class="nav-note">{ src.Err }</div>
+					} else if len(src.Libraries) == 0 {
+						<div class="nav-note">No libraries</div>
+					} else {
+						for _, l := range src.Libraries {
+							<a
+								class={ sidebarLinkClass(meta.libActive(src.Name, l.ID)) }
+								href={ browseHref(src.Name, l.ID) }
+								if meta.libActive(src.Name, l.ID) {
+									aria-current="page"
+								}
+							>
+								<span class="nav-icon" aria-hidden="true">{ libKindIcon(string(l.Kind)) }</span>
+								<span class="nav-label">{ l.Title }</span>
+							</a>
+						}
+					}
+				</div>
+			}
+			if len(meta.Nav) == 0 {
+				<div class="nav-note">
+					No sources configured. Add Plex / Jellyfin credentials in <a href="/settings">Settings</a>.
+				</div>
+			}
+		</div>
+		<div class="nav-foot">
+			<a
+				class={ sidebarLinkClass(meta.Active == "storage") }
+				href="/storage"
+				if meta.Active == "storage" {
+					aria-current="page"
+				}
+			>
+				<span class="nav-icon" aria-hidden="true">▤</span>
+				<span class="nav-label">Storage</span>
+			</a>
+		</div>
+	</nav>
+}
+
+// queueDrawer is the persistent slide-over (sibling of #shell, never swapped by
+// boosted nav). Its body is filled on open via htmx.ajax → /queue/drawer (which
+// returns a self-polling table) and cleared on close to stop the poll.
+templ queueDrawer() {
+	<div id="drawer-overlay" class="drawer-overlay" hidden onclick="pmToggleQueue(false)"></div>
+	<aside id="queue-drawer" class="drawer" role="dialog" aria-label="Download queue" aria-hidden="true" inert>
+		<header class="drawer-head">
+			<h2>Queue</h2>
+			<span class="spacer"></span>
+			<a class="small" href="/queue" hx-boost="true" hx-target="#shell" hx-select="#shell" hx-swap="outerHTML" onclick="pmToggleQueue(false)">full view ›</a>
+			<button class="drawer-close" type="button" aria-label="Close queue" onclick="pmToggleQueue(false)">×</button>
+		</header>
+		<div id="queue-drawer-body" class="drawer-body"></div>
+	</aside>
+}
+
+// portalScript is the only client JS: a global htmx loading bar (suppressed for
+// polling requests), the mobile sidebar toggle, and the queue drawer toggle.
+templ portalScript() {
+	<script>
+		(function () {
+			// Loading bar — show for user-driven requests, not the 2s/5s pollers.
+			function isPoll(e) {
+				var el = e && e.detail && e.detail.elt;
+				var t = el && el.getAttribute ? (el.getAttribute('hx-trigger') || '') : '';
+				return t.indexOf('every') !== -1;
+			}
+			document.body.addEventListener('htmx:beforeRequest', function (e) {
+				if (!isPoll(e)) document.documentElement.classList.add('pm-loading');
+			});
+			document.body.addEventListener('htmx:afterRequest', function (e) {
+				if (!isPoll(e)) document.documentElement.classList.remove('pm-loading');
+			});
+
+			// Mobile off-canvas sidebar. CSS (visibility, scoped to the mobile media
+			// query) takes the closed rail out of the tab order; here we just track
+			// the open state + reflect it on the hamburger for AT.
+			window.pmToggleSidebar = function (open) {
+				var s = document.getElementById('shell'),
+				    h = document.querySelector('.hamburger');
+				if (!s) return;
+				var willOpen = (open === undefined) ? !s.classList.contains('sidebar-open') : open;
+				s.classList.toggle('sidebar-open', willOpen);
+				if (h) h.setAttribute('aria-expanded', String(willOpen));
+			};
+			// A boosted nav rebuilds #shell (dropping .sidebar-open); keep the
+			// hamburger's reported state in sync.
+			document.body.addEventListener('htmx:afterSwap', function () {
+				var s = document.getElementById('shell'), h = document.querySelector('.hamburger');
+				if (s && h) h.setAttribute('aria-expanded', String(s.classList.contains('sidebar-open')));
+			});
+
+			// Queue drawer. Opening loads a self-polling table and moves focus in;
+			// closing clears the body (so the polling node leaves the DOM and the 2s
+			// poll stops), marks the drawer inert (out of tab order + AT), and
+			// restores focus to the trigger.
+			window.pmToggleQueue = function (open) {
+				var d = document.getElementById('queue-drawer'),
+				    o = document.getElementById('drawer-overlay'),
+				    b = document.getElementById('queue-drawer-body'),
+				    trigger = document.querySelector('.qbtn');
+				if (!d) return;
+				var willOpen = (open === undefined) ? !d.classList.contains('open') : open;
+				d.classList.toggle('open', willOpen);
+				d.toggleAttribute('inert', !willOpen);
+				d.setAttribute('aria-hidden', String(!willOpen));
+				o.toggleAttribute('hidden', !willOpen);
+				if (willOpen) {
+					b.innerHTML = '<div class="muted small" style="padding:16px">loading…</div>';
+					htmx.ajax('GET', '/queue/drawer', { target: '#queue-drawer-body', swap: 'innerHTML' })
+						.then(function () { if (!d.classList.contains('open')) b.innerHTML = ''; });
+					var closeBtn = d.querySelector('.drawer-close');
+					if (closeBtn) closeBtn.focus();
+				} else {
+					b.innerHTML = '';
+					if (trigger) trigger.focus();
+				}
+			};
+			document.addEventListener('keydown', function (e) {
+				if (e.key === 'Escape') { window.pmToggleQueue(false); window.pmToggleSidebar(false); }
+			});
+		})();
+	</script>
+}
+
+// errNotice renders a dismissible-looking error banner when msg is non-empty.
+templ errNotice(msg string) {
+	if msg != "" {
+		<div class="notice notice-err">{ msg }</div>
+	}
+}
+
+// InlineError is the small fragment returned when an HTMX action (queue / cancel
+// / evict) fails, so the user sees why instead of a silent no-op.
+templ InlineError(msg string) {
+	<span class="badge badge-error" title={ msg }>error</span>
+	<span class="small muted">{ msg }</span>
+}

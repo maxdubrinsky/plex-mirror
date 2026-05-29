@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>plex-mirror portal — design preview</title>
+<!-- Links the REAL stylesheet so this is a faithful styleguide. @font-face urls
+     are relative to the css file, so the embedded fonts load from disk too. -->
+<link rel="stylesheet" href="../internal/server/static/app.css"/>
+<style>
+  /* styleguide-only chrome (sg- prefix; never ships) */
+  .sg-h { font: 600 11px "IBM Plex Mono", monospace; text-transform: uppercase; letter-spacing: .16em;
+          color: #3ee07b; margin: 40px 0 6px; padding-top: 20px; border-top: 1px dashed #2c302b; }
+  .sg-note { font: 400 12px "IBM Plex Mono", monospace; color: #9aa094; margin: 0 0 14px; }
+  /* show the drawer panel inline (non-fixed) for the styleguide */
+  .sg-drawer { width: 400px; max-width: 100%; border: 1px solid #2c302b; border-radius: 6px;
+               background: #141613; overflow: hidden; }
+  .sg-drawer .drawer-body { max-height: 360px; }
+</style>
+</head>
+<body>
+<div id="top-progress"></div>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<!-- ============ TOP BAR ============ -->
+<header class="topbar">
+  <button class="hamburger" type="button" aria-label="Toggle library menu" onclick="pmToggleSidebar()">≡</button>
+  <a class="brand" href="#">plex-mirror</a>
+  <span class="spacer"></span>
+  <button class="qbtn" type="button" onclick="pmToggleQueue()">Queue <span id="queue-count" class="qcount"><span class="qcount-n active">2</span></span></button>
+  <a class="iconbtn" href="#" title="Settings" aria-label="Settings">⚙</a>
+  <a class="logout" href="#">Sign out</a>
+</header>
+
+<!-- ============ SHELL: sidebar + content ============ -->
+<div id="shell" class="shell">
+  <nav id="sidebar" class="sidebar" aria-label="Library navigation">
+    <div class="nav-scroll">
+      <div class="nav-group">
+        <div class="nav-group-head"><span class="nav-source">plex</span><span class="nav-dl" title="downloadable">↓</span></div>
+        <a class="nav-item active" href="#" aria-current="page"><span class="nav-icon">►</span><span class="nav-label">Movies</span></a>
+        <a class="nav-item" href="#"><span class="nav-icon">▣</span><span class="nav-label">TV Shows</span></a>
+        <a class="nav-item" href="#"><span class="nav-icon">►</span><span class="nav-label">4K Films</span></a>
+        <a class="nav-item" href="#"><span class="nav-icon">♪</span><span class="nav-label">Music</span></a>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-head"><span class="nav-source">jellyfin</span></div>
+        <a class="nav-item" href="#"><span class="nav-icon">►</span><span class="nav-label">Films (mirrored)</span></a>
+        <a class="nav-item" href="#"><span class="nav-icon">▣</span><span class="nav-label">Shows (mirrored)</span></a>
+      </div>
+    </div>
+    <div class="nav-foot">
+      <a class="nav-item" href="#"><span class="nav-icon">▤</span><span class="nav-label">Storage</span></a>
+    </div>
+  </nav>
+
+  <main id="content">
+
+    <!-- ===== BROWSE — cards ===== -->
+    <div class="sg-h">Browse — card view (library selected)</div>
+    <h1>Movies</h1>
+    <div class="panel">
+      <div class="row spread browse-controls">
+        <input class="search" type="search" placeholder="Filter titles…" value=""/>
+        <div class="vtoggle-group" role="group" aria-label="View mode">
+          <button class="vtoggle active" title="Card view">▦</button>
+          <button class="vtoggle" title="Table view">▤</button>
+        </div>
+      </div>
+      <div id="results">
+        <div class="grid">
+          <div class="card"><div class="title">Blade Runner 2049</div><div class="meta">Movie · 2017 · 8.2 GB · MKV</div><div class="actions"><button class="btn btn-primary">Queue</button><a class="btn small" href="#">Details</a></div></div>
+          <div class="card"><div class="title">Dune: Part Two</div><div class="meta">Movie · 2024 · 12.4 GB · MKV</div><div class="actions"><span class="badge badge-ready">ready</span><a class="btn small" href="#">Details</a></div></div>
+          <div class="card"><div class="title">Oppenheimer</div><div class="meta">Movie · 2023 · 9.1 GB · MKV</div><div class="actions"><span class="badge badge-active">downloading</span><a class="btn small" href="#">Details</a></div></div>
+          <div class="card"><div class="title">The Brutalist</div><div class="meta">Movie · 2024 · 14.8 GB · MKV</div><div class="actions"><span class="badge badge-queued">queued</span><a class="btn small" href="#">Details</a></div></div>
+          <div class="card"><div class="title">Sinners</div><div class="meta">Movie · 2025 · 7.7 GB · MKV</div><div class="actions"><span class="badge badge-error">error</span><button class="btn btn-primary">Queue</button><a class="btn small" href="#">Details</a></div></div>
+          <div class="card"><div class="title">Conclave</div><div class="meta">Movie · 2024 · 6.3 GB · MKV</div><div class="actions"><button class="btn btn-primary">Queue</button><a class="btn small" href="#">Details</a></div></div>
+        </div>
+        <div class="row spread" style="margin-top:14px">
+          <span class="muted small mono">Page 2</span>
+          <div class="row"><button class="btn small">‹ Prev</button><button class="btn small">Next ›</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== BROWSE — table ===== -->
+    <div class="sg-h">Browse — table view (dense)</div>
+    <div class="panel">
+      <div class="row spread browse-controls">
+        <input class="search" type="search" placeholder="Filter titles…" value=""/>
+        <div class="vtoggle-group" role="group" aria-label="View mode">
+          <button class="vtoggle" title="Card view">▦</button>
+          <button class="vtoggle active" title="Table view">▤</button>
+        </div>
+      </div>
+      <div id="results">
+        <div class="table-wrap">
+          <table class="responsive items-table">
+            <thead><tr><th>Title</th><th style="width:90px">Kind</th><th style="width:80px">Year</th><th style="width:100px">Size</th><th style="width:200px"></th></tr></thead>
+            <tbody>
+              <tr><td data-label="Title">Blade Runner 2049</td><td data-label="Kind" class="muted">Movie</td><td data-label="Year" class="mono muted">2017</td><td data-label="Size" class="mono">8.2 GB</td><td data-label=""><div class="actions"><button class="btn btn-primary">Queue</button><a class="btn small" href="#">Details</a></div></td></tr>
+              <tr><td data-label="Title">Dune: Part Two</td><td data-label="Kind" class="muted">Movie</td><td data-label="Year" class="mono muted">2024</td><td data-label="Size" class="mono">12.4 GB</td><td data-label=""><div class="actions"><span class="badge badge-ready">ready</span><a class="btn small" href="#">Details</a></div></td></tr>
+              <tr><td data-label="Title">Oppenheimer</td><td data-label="Kind" class="muted">Movie</td><td data-label="Year" class="mono muted">2023</td><td data-label="Size" class="mono">9.1 GB</td><td data-label=""><div class="actions"><span class="badge badge-active">downloading</span><a class="btn small" href="#">Details</a></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="row spread" style="margin-top:14px"><span class="muted small mono">Page 1</span><div class="row"><button class="btn small">Next ›</button></div></div>
+      </div>
+    </div>
+
+    <!-- ===== BROWSE — empty landing ===== -->
+    <div class="sg-h">Browse — nothing selected / no sources</div>
+    <div class="panel"><div class="empty">Pick a library from the sidebar to browse its items.<span class="hint">No sources configured yet — add Plex / Jellyfin credentials in <a href="#">Settings</a>.</span></div></div>
+
+    <!-- ===== ITEM DETAIL ===== -->
+    <div class="sg-h">Item detail — metadata + mirror states</div>
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="#">Movies</a><span class="crumb-sep" aria-hidden="true">›</span><span class="crumb-current" aria-current="page">Dune: Part Two</span></nav>
+    <h1>Dune: Part Two</h1>
+    <div class="panel">
+      <div class="meta">Movie · 2024 · 12.4 GB · MKV</div>
+      <div class="table-wrap"><table class="kv" style="margin-top:12px"><tbody>
+        <tr><th scope="row" style="width:160px">Source</th><td>plex</td></tr>
+        <tr><th scope="row">Source ID</th><td class="mono small">a1b2c3d4e5f6</td></tr>
+        <tr><th scope="row">Container</th><td>mkv</td></tr>
+        <tr><th scope="row">Size</th><td>12.4 GB</td></tr>
+      </tbody></table></div>
+    </div>
+    <div id="mirror-panel" class="panel">
+      <h2 style="margin-top:0">Mirror</h2>
+      <div class="row"><span class="badge badge-active">downloading</span><div class="bar" role="progressbar" aria-valuenow="62" aria-valuemin="0" aria-valuemax="100"><span style="width:62%"></span></div><span class="small muted mono">62% · 7.7 GB / 12.4 GB</span></div>
+      <div class="actions" style="margin-top:14px"><span class="muted small">Download in progress…</span></div>
+    </div>
+    <div id="mirror-panel" class="panel">
+      <h2 style="margin-top:0">Mirror</h2>
+      <div class="row"><span class="badge badge-ready">ready</span></div>
+      <p class="mono small muted" style="margin-top:10px">/media/movies/Dune Part Two (2024).mkv</p>
+      <div class="actions" style="margin-top:14px"><button class="btn btn-danger">Evict</button></div>
+    </div>
+    <div id="mirror-panel" class="panel">
+      <h2 style="margin-top:0">Mirror</h2>
+      <div class="row"><span class="badge badge-error">error</span></div>
+      <div class="notice notice-err" style="margin-top:10px">integrity check failed: size mismatch (expected 12.4 GB, got 9.0 GB)</div>
+      <div class="actions" style="margin-top:14px"><button class="btn btn-primary">Retry</button><button class="btn">Remove</button></div>
+    </div>
+
+    <!-- ===== CHILDREN + BULK ===== -->
+    <div class="sg-h">Item detail — season drill-down + bulk queue + confirm</div>
+    <div id="children-panel" class="panel">
+      <div class="notice bulk-banner"><span>Queued <b>8</b> · 41.2 GB</span><span class="muted">· 2 already present</span></div>
+      <div class="row spread"><h2 style="margin:0">Seasons</h2><button class="btn btn-primary">Queue show</button></div>
+      <div class="grid" style="margin-top:14px">
+        <div class="card"><div class="title">Season 1</div><div class="meta">Season</div><div class="actions"><a class="btn small" href="#">Details</a></div></div>
+        <div class="card"><div class="title">Season 2</div><div class="meta">Season</div><div class="actions"><a class="btn small" href="#">Details</a></div></div>
+      </div>
+    </div>
+    <div class="confirm"><p>Queue <b>16</b> episode(s) across <b>3</b> seasons totalling <b>74.5 GB</b>? <span class="muted">(4 already mirrored)</span></p><div class="row"><button class="btn btn-primary">Queue everything</button><button class="btn">Cancel</button></div></div>
+
+    <!-- ===== STORAGE ===== -->
+    <div class="sg-h">Storage — gauge + inventory</div>
+    <div id="storage-panel">
+      <div class="panel">
+        <div class="row spread"><h2 style="margin:0">Usage</h2><span class="muted small mono">312.5 GB used of 500.0 GB</span></div>
+        <div class="gauge" style="margin-top:10px" role="progressbar" aria-valuenow="63" aria-valuemin="0" aria-valuemax="100"><span style="width:63%"></span><span class="gauge-label">63%</span></div>
+        <div class="stat-row">
+          <div class="stat"><span class="n">312.5 GB</span><span class="l">Used</span></div>
+          <div class="stat"><span class="n">1.2 TB</span><span class="l">Free on disk</span></div>
+          <div class="stat"><span class="n">450.0 GB</span><span class="l">Soft cap</span></div>
+          <div class="stat"><span class="n">500.0 GB</span><span class="l">Hard cap</span></div>
+          <div class="stat"><span class="n">38</span><span class="l">Items</span></div>
+        </div>
+      </div>
+      <div class="sg-note">over-cap gauge (amber → red)</div>
+      <div class="panel"><div class="gauge over" role="progressbar" aria-valuenow="97" aria-valuemin="0" aria-valuemax="100"><span style="width:97%"></span><span class="gauge-label">97%</span></div></div>
+      <div class="panel">
+        <h2 style="margin-top:0">Mirrored items</h2>
+        <div class="table-wrap"><table class="responsive">
+          <thead><tr><th>Title</th><th style="width:120px">Size</th><th style="width:140px">Added</th><th style="width:120px"></th></tr></thead>
+          <tbody>
+            <tr><td data-label="Title"><div>Dune: Part Two</div><div class="sub mono">/media/movies/Dune Part Two (2024).mkv</div></td><td data-label="Size" class="mono">12.4 GB</td><td class="small muted mono" data-label="Added">2h ago</td><td data-label=""><button class="btn btn-danger small">Evict</button></td></tr>
+            <tr><td data-label="Title"><div>Severance — S01E01</div><div class="sub mono">/media/shows/Severance/Season 01/Severance - s01e01.mkv</div></td><td data-label="Size" class="mono">3.1 GB</td><td class="small muted mono" data-label="Added">1d ago</td><td data-label=""><button class="btn btn-danger small">Evict</button></td></tr>
+          </tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- ===== SETTINGS ===== -->
+    <div class="sg-h">Settings</div>
+    <form class="settings">
+      <div class="notice notice-ok">Saved and applied live.</div>
+      <div class="notice notice-warn"><b>PLEXMIRROR_SECRET_KEY is not set.</b> Source tokens are stored unencrypted.</div>
+      <fieldset><legend>Plex</legend>
+        <label class="field"><span class="field-label">Server URL</span><input type="text" placeholder="https://… — leave blank to auto-discover"/><span class="small muted">leave blank to auto-discover from plex.tv</span></label>
+        <label class="field"><span class="field-label">Token <span class="badge badge-ready">set</span></span><input type="password" placeholder="•••••• (leave blank to keep current)"/><label class="clear-secret small muted"><input type="checkbox"/> clear stored token</label></label>
+      </fieldset>
+      <fieldset><legend>Storage</legend>
+        <label class="field"><span class="field-label">Media root <span class="badge badge-muted">env-only</span></span><input type="text" value="/media" disabled/></label>
+        <label class="field"><span class="field-label">Hard cap</span><input type="text" value="500G"/><span class="small muted">e.g. 500G — blank/0 = uncapped</span></label>
+      </fieldset>
+      <div class="actions"><button type="button" class="btn btn-primary">Save &amp; apply</button><span class="small muted">applying…</span></div>
+    </form>
+
+    <!-- ===== QUEUE DRAWER (shown inline) + inline error ===== -->
+    <div class="sg-h">Queue drawer (slides over from the right — click “Queue” up top to demo)</div>
+    <div class="sg-drawer">
+      <header class="drawer-head"><h2>Queue</h2><span class="spacer"></span><a class="small" href="#">full view ›</a><button class="drawer-close" type="button">×</button></header>
+      <div class="drawer-body"><div class="qd-list">
+        <div class="qd-item"><div class="qd-top"><span class="qd-title">Oppenheimer</span><span class="badge badge-active">downloading</span></div><div class="row"><div class="bar" role="progressbar" aria-valuenow="62" aria-valuemin="0" aria-valuemax="100"><span style="width:62%"></span></div><span class="small muted mono">62%</span></div><div class="sub">5.6 GB / 9.1 GB</div></div>
+        <div class="qd-item"><div class="qd-top"><span class="qd-title">The Brutalist</span><span class="badge badge-queued">queued</span></div><div class="row"><div class="bar"><span style="width:0%"></span></div><span class="small muted mono">0%</span></div><div class="sub">— / 14.8 GB</div><button class="btn small">Remove</button></div>
+        <div class="qd-item"><div class="qd-top"><span class="qd-title">Sinners</span><span class="badge badge-error">error</span></div><div class="sub">network error: connection reset by peer</div><button class="btn small">Remove</button></div>
+      </div></div>
+    </div>
+
+    <div class="sg-h">Inline error (failed htmx action)</div>
+    <div class="actions"><span class="badge badge-error">error</span><span class="small muted">source not configured</span></div>
+
+  </main>
+</div>
+
+<!-- real queue drawer (fixed) so the topbar Queue button can demo the slide-over -->
+<div id="drawer-overlay" class="drawer-overlay" hidden onclick="pmToggleQueue(false)"></div>
+<aside id="queue-drawer" class="drawer" role="dialog" aria-label="Download queue" aria-hidden="true">
+  <header class="drawer-head"><h2>Queue</h2><span class="spacer"></span><a class="small" href="#">full view ›</a><button class="drawer-close" type="button" onclick="pmToggleQueue(false)">×</button></header>
+  <div id="queue-drawer-body" class="drawer-body"><div class="qd-list">
+    <div class="qd-item"><div class="qd-top"><span class="qd-title">Oppenheimer</span><span class="badge badge-active">downloading</span></div><div class="row"><div class="bar"><span style="width:62%"></span></div><span class="small muted mono">62%</span></div><div class="sub">5.6 GB / 9.1 GB</div></div>
+    <div class="qd-item"><div class="qd-top"><span class="qd-title">The Brutalist</span><span class="badge badge-queued">queued</span></div><div class="row"><div class="bar"><span style="width:0%"></span></div><span class="small muted mono">0%</span></div><div class="sub">— / 14.8 GB</div><button class="btn small">Remove</button></div>
+  </div></div>
+</aside>
+
+<!-- ============ LOGIN (separate full-page) ============ -->
+<div class="login-wrap">
+  <div class="sg-h">Login — full page (shown unauthenticated)</div>
+  <div class="panel">
+    <h1>plex-mirror</h1>
+    <div class="notice notice-err">Incorrect token.</div>
+    <form><label class="muted small" for="tok">Access token</label><input id="tok" type="password"/><button class="btn btn-primary" type="button" style="width:100%">Sign in</button></form>
+  </div>
+</div>
+
+<script>
+  // preview-only: toggle the drawer/sidebar without a server (body is pre-filled).
+  function pmToggleQueue(open){var d=document.getElementById('queue-drawer'),o=document.getElementById('drawer-overlay');var w=(open===undefined)?!d.classList.contains('open'):open;d.classList.toggle('open',w);d.setAttribute('aria-hidden',String(!w));o.toggleAttribute('hidden',!w);}
+  function pmToggleSidebar(){document.getElementById('shell').classList.toggle('sidebar-open');}
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')pmToggleQueue(false);});
+</script>
+</body>
+</html>

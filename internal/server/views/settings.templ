@@ -1,0 +1,116 @@
+package views
+
+// SettingsPage is the full settings page (glb-gdl.13): edit sources + storage +
+// download tunables from the portal instead of environment variables. Saving
+// applies live (no restart) — the form posts to itself and swaps in the updated
+// fragment with a result banner.
+templ SettingsPage(meta PageMeta, vm SettingsVM) {
+	@Layout(meta) {
+		<h1>Settings</h1>
+		<p class="muted small">
+			Configure sources and storage here instead of editing environment variables.
+			Changes apply live — no restart. Environment variables seed the initial values;
+			once you save, the stored settings take over.
+		</p>
+		@SettingsForm(vm)
+	}
+}
+
+// SettingsForm is the form fragment, re-rendered on save with a banner. id is
+// the hx-swap target so a save replaces it in place.
+templ SettingsForm(vm SettingsVM) {
+	<form id="settings-form" class="settings" hx-post="/settings" hx-target="#settings-form" hx-swap="outerHTML">
+		@settingsBanner(vm)
+		if !vm.Config.SecretKeySet {
+			<div class="notice notice-warn">
+				<b>PLEXMIRROR_SECRET_KEY is not set.</b> Source tokens are stored
+				unencrypted in the local database. Set that environment variable
+				(and restart once) to encrypt secrets at rest.
+			</div>
+		}
+		<fieldset>
+			<legend>Plex</legend>
+			@textField("Server URL", "plex_url", vm.Config.PlexURL, "https://… — leave blank to auto-discover from plex.tv")
+			@textField("Server name", "plex_server", vm.Config.PlexServer, "for plex.tv discovery when the URL is blank")
+			@textField("Client ID", "plex_client_id", vm.Config.PlexClientID, "X-Plex-Client-Identifier (optional)")
+			@secretField("Token", "plex_token", vm.Config.PlexTokenSet, vm.Config.PlexTokenUnreadable, "per-resource access token for the shared server")
+		</fieldset>
+		<fieldset>
+			<legend>Jellyfin</legend>
+			@textField("Server URL", "jellyfin_url", vm.Config.JellyfinURL, "https://…")
+			@textField("User", "jellyfin_user", vm.Config.JellyfinUser, "user id or username (optional)")
+			@secretField("Token / API key", "jellyfin_token", vm.Config.JellyfinTokenSet, vm.Config.JellyfinTokenUnreadable, "")
+		</fieldset>
+		<fieldset>
+			<legend>Storage</legend>
+			<label class="field">
+				<span class="field-label">Media root <span class="badge badge-muted">env-only</span></span>
+				<input type="text" value={ vm.Config.MediaRoot } disabled/>
+			</label>
+			@textField("Hard cap", "storage_hard_cap", vm.Config.StorageHardCap, "e.g. 500G — blank/0 = uncapped")
+			@textField("Soft cap", "storage_soft_cap", vm.Config.StorageSoftCap, "eviction target; must be ≤ hard cap")
+		</fieldset>
+		<fieldset>
+			<legend>Downloads</legend>
+			@textField("Concurrency", "download_concurrency", vm.Config.DownloadConcurrency, "simultaneous downloads, 1–32")
+			@textField("Poll interval", "download_poll_every", vm.Config.DownloadPollEvery, "e.g. 10s — how often to scan the queue")
+			@textField("Copy buffer", "download_buffer", vm.Config.DownloadBuffer, "e.g. 1M — per-stream copy buffer")
+		</fieldset>
+		<div class="actions">
+			<button type="submit" class="btn btn-primary">Save &amp; apply</button>
+			<span class="htmx-indicator small muted">applying…</span>
+		</div>
+	</form>
+}
+
+templ settingsBanner(vm SettingsVM) {
+	if vm.Err != "" {
+		<div class="notice notice-err">{ vm.Err }</div>
+	} else if vm.SavedNotLive {
+		<div class="notice notice-warn">{ vm.Warn }. The saved settings will take effect on the next restart.</div>
+	} else if vm.Saved {
+		<div class="notice notice-ok">Saved and applied live.</div>
+	}
+}
+
+// textField is one labelled text input with a muted help line.
+templ textField(label, name, value, help string) {
+	<label class="field">
+		<span class="field-label">{ label }</span>
+		<input type="text" name={ name } value={ value } placeholder={ help } autocomplete="off" spellcheck="false"/>
+		if help != "" {
+			<span class="small muted">{ help }</span>
+		}
+	</label>
+}
+
+// secretField renders a credential input: a tri-state badge (set / not set /
+// unreadable), a write-only password box (blank = keep current), and — when a
+// token is stored — a checkbox to clear it. The value is never rendered back.
+// "unreadable" means a token IS stored but can't be decrypted with the current
+// PLEXMIRROR_SECRET_KEY (rotated/misconfigured), so the operator isn't misled
+// into thinking the credential is simply absent.
+templ secretField(label, name string, isSet, unreadable bool, help string) {
+	<label class="field">
+		<span class="field-label">
+			{ label }
+			if unreadable {
+				<span class="badge badge-error" title="A token is stored but can't be decrypted with the current PLEXMIRROR_SECRET_KEY. Re-enter it, or restore the original key.">unreadable</span>
+			} else if isSet {
+				<span class="badge badge-ready">set</span>
+			} else {
+				<span class="badge badge-muted">not set</span>
+			}
+		</span>
+		<input type="password" name={ name } value="" placeholder={ secretPlaceholder(isSet) } autocomplete="new-password"/>
+		if isSet || unreadable {
+			<label class="clear-secret small muted">
+				<input type="checkbox" name={ clearFieldName(name) } value="1"/>
+				clear stored token
+			</label>
+		}
+		if help != "" {
+			<span class="small muted">{ help }</span>
+		}
+	</label>
+}

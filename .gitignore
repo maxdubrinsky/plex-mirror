@@ -1,0 +1,41 @@
+# --- Build output ---
+# `go build ./cmd/plex-mirror` from the repo root drops the binary here.
+# Anchored to root so it never matches the cmd/plex-mirror source directory.
+/plex-mirror
+/bin/
+/dist/
+
+# Go test / coverage artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# --- Runtime state ---
+# Pure-Go SQLite DB (modernc.org/sqlite) plus its WAL/SHM sidecars.
+*.db
+*.db-wal
+*.db-shm
+
+# Downloaded media partials, if MediaRoot ever points inside the repo.
+.partials/
+
+# --- Local config & secrets ---
+.env
+.env.local
+.env.*.local
+compose.override.yml
+docker-compose.override.yml
+
+# --- Python helper scripts cache ---
+# plex_token.py / probe_plex.py are committed; their bytecode is not.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# --- Editor / OS cruft ---
+.DS_Store
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,119 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/maxdubrinsky/plex-mirror/internal/service"
+)
+
+// QueuePage shows in-flight downloads. The table body polls /queue/rows every
+// 2s so progress bars advance without a full reload.
+templ QueuePage(meta PageMeta, items []service.MirrorItem) {
+	@Layout(meta) {
+		<h1>Queue</h1>
+		<div class="panel">
+			<div class="table-wrap">
+				<table class="responsive">
+					<thead>
+						<tr>
+							<th>Title</th>
+							<th>Status</th>
+							<th style="width:220px">Progress</th>
+							<th style="width:140px">Queued</th>
+							<th></th>
+						</tr>
+					</thead>
+					<tbody hx-get="/queue/rows" hx-trigger="load, every 2s" hx-swap="innerHTML">
+						@QueueRows(items)
+					</tbody>
+				</table>
+			</div>
+		</div>
+		<p class="muted small">Auto-refreshing every 2s. Completed items move to <a href="/storage">Storage</a>.</p>
+	}
+}
+
+// QueueDrawerBody is the slide-over queue: a compact block list (narrow column,
+// no horizontal scroll) that polls /queue/rows?compact=1 every 2s. It's loaded
+// into #queue-drawer-body on open and cleared on close — removing this polling
+// node is what stops the poll.
+templ QueueDrawerBody(items []service.MirrorItem) {
+	<div id="qd-list" class="qd-list" hx-get="/queue/rows?compact=1" hx-trigger="every 2s" hx-swap="innerHTML">
+		@QueueRowsCompact(items)
+	</div>
+}
+
+// QueueRowsCompact is the drawer's polled fragment: one stacked block per
+// in-flight item. Cancel removes just its block (empty 200 → outerHTML swap),
+// mirroring the full queue table's behavior.
+templ QueueRowsCompact(items []service.MirrorItem) {
+	if len(items) == 0 {
+		<div class="empty">
+			Nothing in flight.
+			<span class="hint">Queue something from a library.</span>
+		</div>
+	} else {
+		for _, it := range items {
+			<div class="qd-item">
+				<div class="qd-top">
+					<span class="qd-title">{ it.Title }</span>
+					<span class={ StatusClass(it.Status) }>{ it.Status }</span>
+				</div>
+				if it.Status == "error" && it.Error != "" {
+					<div class="sub">{ it.Error }</div>
+				} else {
+					<div class="row">
+						<div class="bar" role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={ fmt.Sprintf("%d", Pct(it.Progress)) }><span style={ pctStyle(Pct(it.Progress)) }></span></div>
+						<span class="small muted mono">{ fmt.Sprintf("%d%%", Pct(it.Progress)) }</span>
+					</div>
+					<div class="sub">{ HumanBytes(it.BytesDone) } / { HumanBytes(it.SizeBytes) }</div>
+				}
+				if it.Status == "queued" || it.Status == "error" {
+					<button class="btn small" hx-post={ cancelURL(it.ID) } hx-target="closest .qd-item" hx-swap="outerHTML swap:0.2s">Remove</button>
+				}
+			</div>
+		}
+	}
+}
+
+// QueueCount is the topbar badge: the number of in-flight (queued + downloading)
+// items, polled every 5s. Empty render when nothing is in flight so the chip
+// stays unobtrusive; the "active" class lets the topbar glow while work runs.
+templ QueueCount(n int) {
+	if n > 0 {
+		<span class="qcount-n active">{ fmt.Sprintf("%d", n) }</span>
+	}
+}
+
+// QueueRows is the polled fragment: one row per in-flight (queued / downloading
+// / error) item.
+templ QueueRows(items []service.MirrorItem) {
+	if len(items) == 0 {
+		<tr><td colspan="5" class="empty">Nothing in flight.</td></tr>
+	} else {
+		for _, it := range items {
+			<tr>
+				<td data-label="Title">
+					<div>{ it.Title }</div>
+					if it.Status == "error" && it.Error != "" {
+						<div class="sub">{ it.Error }</div>
+					}
+				</td>
+				<td data-label="Status"><span class={ StatusClass(it.Status) }>{ it.Status }</span></td>
+				<td data-label="Progress">
+					<div class="row">
+						<div class="bar" role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={ fmt.Sprintf("%d", Pct(it.Progress)) }><span style={ pctStyle(Pct(it.Progress)) }></span></div>
+						<span class="small muted mono">{ fmt.Sprintf("%d%%", Pct(it.Progress)) }</span>
+					</div>
+					<div class="sub">{ HumanBytes(it.BytesDone) } / { HumanBytes(it.SizeBytes) }</div>
+				</td>
+				<td class="small muted mono" data-label="Queued">{ RelTime(it.QueuedAt) }</td>
+				<td data-label="">
+					if it.Status == "queued" || it.Status == "error" {
+						<button class="btn small" hx-post={ cancelURL(it.ID) } hx-target="closest tr" hx-swap="outerHTML swap:0.2s">Remove</button>
+					}
+				</td>
+			</tr>
+		}
+	}
+}

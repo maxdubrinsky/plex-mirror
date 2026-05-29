@@ -1,0 +1,29 @@
+package views
+
+// LoginPage is the shared-secret sign-in form, shown when an access token is
+// configured and the request isn't yet authenticated. It posts the token to
+// /login, which sets the auth cookie.
+templ LoginPage(errMsg string) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Sign in · plex-mirror</title>
+			<link rel="stylesheet" href="/static/app.css"/>
+		</head>
+		<body>
+			<div class="login-wrap">
+				<div class="panel">
+					<h1>plex-mirror</h1>
+					@errNotice(errMsg)
+					<form method="post" action="/login">
+						<label class="muted small" for="token">Access token</label>
+						<input id="token" type="password" name="token" autofocus autocomplete="current-password"/>
+						<button class="btn btn-primary" type="submit" style="width:100%">Sign in</button>
+					</form>
+				</div>
+			</div>
+		</body>
+	</html>
+}

@@ -1,0 +1,81 @@
+services:
+  plex-mirror:
+    build: .
+    image: plex-mirror:dev
+    container_name: plex-mirror
+    restart: unless-stopped
+    environment:
+      PLEXMIRROR_HTTP_ADDR: ":8080"
+      PLEXMIRROR_DB_PATH: "/var/lib/plex-mirror/state.db"
+      PLEXMIRROR_MEDIA_ROOT: "/media"
+      PLEXMIRROR_LOG_LEVEL: "info"
+      # Shared-secret auth for the web portal (cookie) and the /mcp endpoint
+      # (bearer). Leave empty to rely on Traefik forward-auth / a trusted LAN;
+      # set it to require sign-in. /healthz and /static stay open either way.
+      PLEXMIRROR_AUTH_TOKEN: "${PLEXMIRROR_AUTH_TOKEN:-}"
+      # Encryption key for source tokens stored via the portal Settings page.
+      # When set, those secrets are AES-256-GCM encrypted at rest in the SQLite
+      # DB; when empty they're stored plaintext (the portal warns). Env-only.
+      PLEXMIRROR_SECRET_KEY: "${PLEXMIRROR_SECRET_KEY:-}"
+      # Source credentials + storage caps below can also be set/changed live from
+      # the portal's Settings page (persisted in the DB, layered over these env
+      # values). Env here just seeds the initial values.
+      #
+      # Source credentials, substituted from a sibling .env (Compose reads it
+      # automatically) so secrets stay out of this committed file. The keys in
+      # .env must use these PLEXMIRROR_* names. Absent values are non-fatal:
+      # the service boots browse-only and the download engine stays disabled.
+      #
+      # Plex location — two ways:
+      #  (a) Discovery (recommended): set PLEXMIRROR_PLEX_SERVER to the server's
+      #      name (as it appears in Plex) and PLEXMIRROR_PLEX_TOKEN to your
+      #      plex.tv ACCOUNT token. At startup the service resolves the server's
+      #      connection URL *and* its per-resource access token from plex.tv, so
+      #      you never hardcode a volatile *.plex.direct URL and a new share just
+      #      works once you set its name here.
+      #  (b) Explicit: set PLEXMIRROR_PLEX_URL to the server URL and
+      #      PLEXMIRROR_PLEX_TOKEN to a token valid for it (the per-resource
+      #      token for a share). PLEXMIRROR_PLEX_URL takes precedence over (a).
+      PLEXMIRROR_PLEX_URL: "${PLEXMIRROR_PLEX_URL:-}"
+      PLEXMIRROR_PLEX_TOKEN: "${PLEXMIRROR_PLEX_TOKEN:-}"
+      PLEXMIRROR_PLEX_SERVER: "${PLEXMIRROR_PLEX_SERVER:-}"
+      # Optional: a distinct device identifier in your plex.tv device list.
+      # Defaults to "plex-mirror" when empty.
+      PLEXMIRROR_PLEX_CLIENT_ID: "${PLEXMIRROR_PLEX_CLIENT_ID:-}"
+      # Jellyfin: only needed for the post-import library scan trigger (so a
+      # mirrored file shows up in Jellyfin without a manual rescan).
+      PLEXMIRROR_JELLYFIN_URL: "${PLEXMIRROR_JELLYFIN_URL:-}"
+      PLEXMIRROR_JELLYFIN_TOKEN: "${PLEXMIRROR_JELLYFIN_TOKEN:-}"
+      # Quota for the temporary mirror. Empty = uncapped. Set small values to
+      # exercise eviction + the storage gauge, e.g. SOFT_CAP=20G HARD_CAP=25G.
+      # Accepts K/M/G/T (1024-based). Sweeper runs every PLEXMIRROR_STORAGE_SWEEP_EVERY.
+      PLEXMIRROR_STORAGE_SOFT_CAP: "${PLEXMIRROR_STORAGE_SOFT_CAP:-}"
+      PLEXMIRROR_STORAGE_HARD_CAP: "${PLEXMIRROR_STORAGE_HARD_CAP:-}"
+    volumes:
+      - state:/var/lib/plex-mirror
+      # Same /media volume Jellyfin reads from. Override the host path in a
+      # local compose.override.yml rather than editing this file.
+      - ${MEDIA_HOST_PATH:-./media}:/media
+    healthcheck:
+      # Distroless has no shell or curl, so the binary doubles as its own probe.
+      test: ["CMD", "/plex-mirror", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.plex-mirror.rule=Host(`plex-mirror.local`)"
+      - "traefik.http.routers.plex-mirror.entrypoints=websecure"
+      - "traefik.http.routers.plex-mirror.tls=true"
+      - "traefik.http.services.plex-mirror.loadbalancer.server.port=8080"
+      - "traefik.http.services.plex-mirror.loadbalancer.healthcheck.path=/healthz"
+    networks:
+      - web
+
+volumes:
+  state:
+
+networks:
+  web:
+    external: true

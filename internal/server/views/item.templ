@@ -1,0 +1,232 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/maxdubrinsky/plex-mirror/internal/service"
+	"github.com/maxdubrinsky/plex-mirror/internal/source"
+)
+
+// ItemDetailPage shows full metadata for one source item plus the mirror
+// lifecycle actions (queue / cancel / evict) appropriate to its current state.
+templ ItemDetailPage(meta PageMeta, vm ItemDetailVM) {
+	@Layout(meta) {
+		@breadcrumb(vm)
+		<h1>{ vm.Item.Title }</h1>
+		@errNotice(vm.Err)
+		<div class="panel">
+			<div class="meta">{ itemMeta(vm.Item) }</div>
+			<div class="table-wrap">
+				<table class="kv" style="margin-top:12px">
+					<tbody>
+						<tr><th scope="row" style="width:160px">Source</th><td>{ vm.Source }</td></tr>
+						<tr><th scope="row">Source ID</th><td class="mono small">{ vm.Item.ID }</td></tr>
+						if vm.Item.Container != "" {
+							<tr><th scope="row">Container</th><td>{ vm.Item.Container }</td></tr>
+						}
+						if vm.Item.SizeBytes > 0 {
+							<tr><th scope="row">Size</th><td>{ HumanBytes(vm.Item.SizeBytes) }</td></tr>
+						}
+						if vm.Item.ShowTitle != "" {
+							<tr><th scope="row">Show</th><td>{ vm.Item.ShowTitle } — S{ fmt.Sprintf("%02d", vm.Item.SeasonNumber) }E{ fmt.Sprintf("%02d", vm.Item.EpisodeNumber) }</td></tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		if vm.isContainer() {
+			@ChildrenPanel(vm)
+		} else {
+			@ItemMirrorPanel(vm)
+		}
+	}
+}
+
+// breadcrumb renders the ancestor trail (root → show → season) above the title
+// so drilling down into a show/season/episode is reversible. The current item
+// is the page <h1>, so the trail ends with it as non-clickable text.
+templ breadcrumb(vm ItemDetailVM) {
+	<nav class="crumbs" aria-label="Breadcrumb" hx-boost="true" hx-target="#shell" hx-select="#shell" hx-swap="outerHTML">
+		for i, c := range vm.breadcrumbTrail() {
+			if i > 0 {
+				<span class="crumb-sep" aria-hidden="true">›</span>
+			}
+			<a href={ c.Href }>{ c.Label }</a>
+		}
+		<span class="crumb-sep" aria-hidden="true">›</span>
+		<span class="crumb-current" aria-current="page">{ vm.Item.Title }</span>
+	</nav>
+}
+
+// ChildrenPanel is the drill-down grid for a show (→ seasons) or season
+// (→ episodes). Episodes carry a Container so ActionCell offers Queue; seasons
+// don't, so they show only a Details link that drills one level deeper. It's
+// the hx-swap target for the bulk "Queue season/show" action, so it re-renders
+// with a result banner (vm.Bulk) after queuing. Exported so the queue-container
+// handler can return it as a fragment.
+templ ChildrenPanel(vm ItemDetailVM) {
+	<div id="children-panel" class="panel">
+		if vm.Bulk != nil {
+			@bulkBanner(vm.Bulk)
+		}
+		<div class="row spread">
+			<h2 style="margin:0">{ vm.childrenHeading() }</h2>
+			@bulkQueueControl(vm)
+		</div>
+		<div id="bulk-confirm-zone"></div>
+		if len(vm.Children) == 0 {
+			<p class="muted">Nothing here.</p>
+		} else {
+			<div class="grid" style="margin-top:14px">
+				for _, c := range vm.Children {
+					<div class="card">
+						<div class="title">{ c.Title }</div>
+						<div class="meta">{ itemMeta(c) }</div>
+						@ActionCell(vm.Source, c.ID, c.Container, vm.Downloadable, vm.childStatus(c.ID))
+					</div>
+				}
+			</div>
+		}
+	</div>
+}
+
+// bulkQueueControl offers "Queue season" (direct, with a browser confirm) or
+// "Queue show" (a server-rendered confirm with episode count + total size,
+// since a show page hasn't loaded the per-season episodes yet).
+templ bulkQueueControl(vm ItemDetailVM) {
+	if vm.bulkQueueable() {
+		switch vm.Item.Kind {
+			case source.ItemSeason:
+				@seasonQueueButton(vm)
+			case source.ItemShow:
+				<button
+					class="btn btn-primary"
+					hx-get={ queueContainerConfirmURL(vm.Source, vm.Item.ID) }
+					hx-target="#bulk-confirm-zone"
+					hx-swap="innerHTML"
+				>Queue show</button>
+		}
+	}
+}
+
+templ seasonQueueButton(vm ItemDetailVM) {
+	{{ count, bytes := vm.queueableChildren() }}
+	<button
+		class="btn btn-primary"
+		hx-post={ queueContainerURL(vm.Source, vm.Item.ID) }
+		hx-target="#children-panel"
+		hx-swap="outerHTML"
+		hx-confirm={ seasonQueueConfirm(count, bytes) }
+	>Queue season</button>
+}
+
+// bulkBanner reports the outcome of a bulk queue at the top of the panel.
+templ bulkBanner(r *service.BulkQueueResult) {
+	<div class="notice bulk-banner">
+		<span>Queued <b>{ fmt.Sprintf("%d", r.Queued) }</b> · { HumanBytes(r.TotalBytes) }</span>
+		if r.Skipped > 0 {
+			<span class="muted">· { fmt.Sprintf("%d already present", r.Skipped) }</span>
+		}
+		if r.Failed > 0 {
+			<span class="badge badge-error" title={ bulkErrorTitle(r) }>{ fmt.Sprintf("%d failed", r.Failed) }</span>
+		}
+	</div>
+}
+
+// QueueConfirm is the show-level confirm dialog (count + size + season span)
+// returned by GET /queue/container/confirm into #bulk-confirm-zone. Confirming
+// posts to /queue/container, which swaps the whole panel (clearing this dialog).
+templ QueueConfirm(p service.ContainerPreview) {
+	<div class="confirm">
+		if p.ToQueue == 0 {
+			<p class="muted">Nothing to queue — all { fmt.Sprintf("%d", p.AlreadyHave) } episode(s) are already mirrored or in flight.</p>
+			<button class="btn small" hx-get={ childrenURL(p.Source, p.ItemID) } hx-target="#children-panel" hx-swap="outerHTML">Close</button>
+		} else {
+			<p>
+				Queue <b>{ fmt.Sprintf("%d", p.ToQueue) }</b> episode(s)
+				if p.Seasons > 1 {
+					across <b>{ fmt.Sprintf("%d", p.Seasons) }</b> seasons
+				}
+				totalling <b>{ HumanBytes(p.TotalBytes) }</b>?
+				if p.AlreadyHave > 0 {
+					<span class="muted">({ fmt.Sprintf("%d", p.AlreadyHave) } already mirrored)</span>
+				}
+			</p>
+			<div class="row">
+				<button class="btn btn-primary" hx-post={ queueContainerURL(p.Source, p.ItemID) } hx-target="#children-panel" hx-swap="outerHTML">Queue everything</button>
+				<button class="btn" hx-get={ childrenURL(p.Source, p.ItemID) } hx-target="#children-panel" hx-swap="outerHTML">Cancel</button>
+			</div>
+		}
+	</div>
+}
+
+// ItemMirrorPanel is the swap target for queue/cancel/evict on the detail page:
+// it shows current mirror state and the available actions, and replaces itself
+// after an action.
+templ ItemMirrorPanel(vm ItemDetailVM) {
+	<div id="mirror-panel" class="panel">
+		<h2 style="margin-top:0">Mirror</h2>
+		if vm.Mirror == nil {
+			<p class="muted">Not mirrored locally.</p>
+		} else {
+			<div class="row">
+				<span class={ StatusClass(vm.Mirror.Status) }>{ vm.Mirror.Status }</span>
+				if vm.Mirror.Status == "downloading" {
+					<div class="bar" role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={ fmt.Sprintf("%d", Pct(vm.Mirror.Progress)) }><span style={ pctStyle(Pct(vm.Mirror.Progress)) }></span></div>
+					<span class="small muted">{ fmt.Sprintf("%d%%", Pct(vm.Mirror.Progress)) } · { HumanBytes(vm.Mirror.BytesDone) } / { HumanBytes(vm.Mirror.SizeBytes) }</span>
+				}
+			</div>
+			if vm.Mirror.Status == "error" && vm.Mirror.Error != "" {
+				<div class="notice notice-err" style="margin-top:10px">{ vm.Mirror.Error }</div>
+			}
+			if vm.Mirror.Status == "ready" && vm.Mirror.LocalPath != "" {
+				<p class="mono small muted" style="margin-top:10px">{ vm.Mirror.LocalPath }</p>
+			}
+		}
+		<div class="actions" style="margin-top:14px">
+			@detailActions(vm)
+		</div>
+	</div>
+}
+
+templ detailActions(vm ItemDetailVM) {
+	switch vm.status() {
+		case "queued":
+			@cancelButton(vm.Mirror.ID, "Remove from queue")
+		case "downloading":
+			<span class="muted small">Download in progress…</span>
+		case "error":
+			if canQueue(vm.Downloadable, "", vm.Item.Container) {
+				@queueButton(vm.Source, vm.Item.ID, "Retry")
+			}
+			@cancelButton(vm.Mirror.ID, "Remove")
+		case "ready":
+			@evictButton(vm.Mirror.ID)
+		default:
+			if canQueue(vm.Downloadable, vm.status(), vm.Item.Container) {
+				@queueButton(vm.Source, vm.Item.ID, "Queue download")
+			} else if !vm.Downloadable {
+				<span class="muted small">This source isn't downloadable.</span>
+			} else if vm.Item.Container == "" {
+				<span class="muted small">No downloadable file on this item.</span>
+			}
+	}
+}
+
+templ queueButton(srcName, itemID, label string) {
+	<button class="btn btn-primary" hx-post={ queueURL(srcName, itemID) } hx-target="#mirror-panel" hx-swap="outerHTML">{ label }</button>
+}
+
+templ cancelButton(id int64, label string) {
+	<button class="btn" hx-post={ cancelURL(id) } hx-target="#mirror-panel" hx-swap="outerHTML">{ label }</button>
+}
+
+templ evictButton(id int64) {
+	<button
+		class="btn btn-danger"
+		hx-post={ evictURL(id) }
+		hx-target="#mirror-panel"
+		hx-swap="outerHTML"
+		hx-confirm="Evict this item? The local file will be deleted."
+	>Evict</button>
+}

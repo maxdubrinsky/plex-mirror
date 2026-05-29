@@ -1,0 +1,74 @@
+package views
+
+import "fmt"
+
+// StoragePage shows disk usage and the mirrored inventory with manual evict.
+templ StoragePage(meta PageMeta, vm StorageVM) {
+	@Layout(meta) {
+		<h1>Storage</h1>
+		@StoragePanel(vm)
+	}
+}
+
+// StoragePanel is the swap target for evictions: the usage gauge, the summary
+// stats, and the ready-item table. /evict re-renders the whole panel so the
+// gauge moves as items leave.
+templ StoragePanel(vm StorageVM) {
+	<div id="storage-panel">
+		@errNotice(vm.Err)
+		<div class="panel">
+			<div class="row spread">
+				<h2 style="margin:0">Usage</h2>
+				<span class="muted small">{ HumanBytes(vm.Stats.UsedBytes) } used of { HumanBytes(gaugeMax(vm.Stats)) }</span>
+			</div>
+			<div class={ gaugeClass(vm) } style="margin-top:10px" role="progressbar" aria-label="Storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow={ fmt.Sprintf("%d", usedPct(vm.Stats)) }>
+				<span style={ pctStyle(usedPct(vm.Stats)) }></span>
+				<span class="gauge-label" aria-hidden="true">{ fmt.Sprintf("%d%%", usedPct(vm.Stats)) }</span>
+			</div>
+			<div class="stat-row">
+				<div class="stat"><span class="n">{ HumanBytes(vm.Stats.UsedBytes) }</span><span class="l">Used</span></div>
+				<div class="stat"><span class="n">{ HumanBytes(vm.Stats.FreeBytes) }</span><span class="l">Free on disk</span></div>
+				<div class="stat"><span class="n">{ capLabel(vm.Stats.SoftCapBytes) }</span><span class="l">Soft cap</span></div>
+				<div class="stat"><span class="n">{ capLabel(vm.Stats.HardCapBytes) }</span><span class="l">Hard cap</span></div>
+				<div class="stat"><span class="n">{ fmt.Sprintf("%d", vm.Stats.ItemsReady) }</span><span class="l">Items</span></div>
+			</div>
+		</div>
+		<div class="panel">
+			<h2 style="margin-top:0">Mirrored items</h2>
+			<div class="table-wrap">
+				<table class="responsive">
+					<thead>
+						<tr><th>Title</th><th style="width:120px">Size</th><th style="width:140px">Added</th><th style="width:120px"></th></tr>
+					</thead>
+					<tbody>
+						if len(vm.Items) == 0 {
+							<tr><td colspan="4" class="empty">No mirrored items yet.<span class="hint">Queue something from a library to start mirroring.</span></td></tr>
+						} else {
+							for _, it := range vm.Items {
+								<tr>
+									<td data-label="Title">
+										<div>{ it.Title }</div>
+										if it.LocalPath != "" {
+											<div class="sub mono">{ it.LocalPath }</div>
+										}
+									</td>
+									<td data-label="Size" class="mono">{ HumanBytes(it.SizeBytes) }</td>
+									<td class="small muted mono" data-label="Added">{ RelTime(it.CompletedAt) }</td>
+									<td data-label="">
+										<button
+											class="btn btn-danger small"
+											hx-post={ evictURL(it.ID) }
+											hx-target="#storage-panel"
+											hx-swap="outerHTML"
+											hx-confirm={ "Evict \"" + it.Title + "\"? The local file will be deleted." }
+										>Evict</button>
+									</td>
+								</tr>
+							}
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+}
