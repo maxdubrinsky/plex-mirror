@@ -16,6 +16,7 @@ coverage.html
 *.db
 *.db-wal
 *.db-shm
+*.db-journal
 
 # Downloaded media partials, if MediaRoot ever points inside the repo.
 .partials/

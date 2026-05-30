@@ -33,7 +33,14 @@ type Scanner interface {
 
 // Options bundles the engine's external dependencies + tunables.
 type Options struct {
-	MediaRoot   string
+	MediaRoot string
+
+	// Per-kind subdirectory names under MediaRoot. Empty falls back to the
+	// Layout defaults (movies/shows/other).
+	MoviesDir string
+	ShowsDir  string
+	OtherDir  string
+
 	Concurrency int          // default 2
 	HTTPClient  *http.Client // default 30s timeout; long-running streaming uses ctx
 	Scanner     Scanner      // optional; nil disables post-download scan
@@ -139,9 +146,14 @@ func New(store *db.Store, storageMgr *storage.Manager, opts Options) (*Engine, e
 	}
 
 	return &Engine{
-		store:          store,
-		storage:        storageMgr,
-		layout:         Layout{MediaRoot: opts.MediaRoot},
+		store:   store,
+		storage: storageMgr,
+		layout: Layout{
+			MediaRoot: opts.MediaRoot,
+			MoviesDir: opts.MoviesDir,
+			ShowsDir:  opts.ShowsDir,
+			OtherDir:  opts.OtherDir,
+		},
 		http:           hc,
 		scanner:        opts.Scanner,
 		resolver:       opts.Resolver,

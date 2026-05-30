@@ -107,6 +107,11 @@ Resumable HTTP `Range` GET against a `DownloadResolver`:
 - `ResetStaleDownloads` flips orphaned `downloading` rows back to `queued` on startup.
 - `layout.go` builds Jellyfin-friendly paths (`movies/Title (Year).ext`,
   `shows/Show/Season NN/Show - sNNeNN - Title.ext`) and `sanitize`s titles for the FS.
+  The per-kind subfolder names (`movies`/`shows`/`other`) are configurable — env
+  `PLEXMIRROR_MOVIES_DIR`/`_SHOWS_DIR`/`_OTHER_DIR` seed them and the portal Settings
+  page overrides live (e.g. `shows`→`tv`); `config.ValidateLibraryDir` enforces a
+  single safe path component. Changing a name only affects *new* downloads — the
+  `local_path` of already-mirrored rows is unchanged, so eviction still finds them.
 
 ### Storage manager (`internal/storage`)
 

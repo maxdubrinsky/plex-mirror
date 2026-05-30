@@ -56,6 +56,31 @@ func TestLayoutFinalEpisode(t *testing.T) {
 	}
 }
 
+func TestLayoutFinalCustomDirs(t *testing.T) {
+	l := Layout{MediaRoot: "/media", MoviesDir: "films", ShowsDir: "tv", OtherDir: "misc"}
+
+	movie, err := l.Final("plex", source.Item{
+		ID: "1", Title: "Blade Runner", Kind: source.ItemMovie, Year: 1982, Container: "mkv",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/media/films/Blade Runner (1982).mkv"; movie != want {
+		t.Errorf("movie: got %q want %q", movie, want)
+	}
+
+	ep, err := l.Final("plex", source.Item{
+		ID: "9", Title: "Pilot", Kind: source.ItemEpisode,
+		ShowTitle: "Severance", SeasonNumber: 1, EpisodeNumber: 1, Container: "mkv",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/media/tv/Severance/Season 01/Severance - s01e01 - Pilot.mkv"; ep != want {
+		t.Errorf("episode: got %q want %q", ep, want)
+	}
+}
+
 func TestLayoutFinalMissingContainer(t *testing.T) {
 	l := Layout{MediaRoot: "/media"}
 	_, err := l.Final("plex", source.Item{

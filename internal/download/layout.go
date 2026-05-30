@@ -11,7 +11,9 @@ import (
 	"github.com/maxdubrinsky/plex-mirror/internal/source"
 )
 
-// Layout builds the Jellyfin-friendly path for an item under MediaRoot.
+// Layout builds the Jellyfin-friendly path for an item under MediaRoot. The
+// per-kind subdirectory names are configurable (MoviesDir/ShowsDir/OtherDir);
+// the defaults below match Jellyfin's common layout:
 //
 //	Movies   -> <root>/movies/<title> (<year>).<ext>
 //	Episodes -> <root>/shows/<show>/Season NN/<show> - sNNeNN - <title>.<ext>
@@ -22,6 +24,22 @@ import (
 // indexing the in-flight file.
 type Layout struct {
 	MediaRoot string
+
+	// MoviesDir, ShowsDir and OtherDir name the per-kind subdirectories under
+	// MediaRoot. Empty falls back to the historical defaults (movies/shows/other)
+	// so a bare Layout{MediaRoot: …} — e.g. the cancel path, which only calls
+	// Partial — keeps working without spelling them out.
+	MoviesDir string
+	ShowsDir  string
+	OtherDir  string
+}
+
+// dirOr returns the configured directory name, or def when it's empty.
+func dirOr(name, def string) string {
+	if name == "" {
+		return def
+	}
+	return name
 }
 
 // Final returns the absolute destination path for item once the download
@@ -47,7 +65,7 @@ func (l Layout) Final(src string, item source.Item) (string, error) {
 		if item.Year > 0 {
 			name = fmt.Sprintf("%s (%d)", title, item.Year)
 		}
-		return filepath.Join(l.MediaRoot, "movies", name+"."+ext), nil
+		return filepath.Join(l.MediaRoot, dirOr(l.MoviesDir, "movies"), name+"."+ext), nil
 
 	case source.ItemEpisode:
 		show := sanitize(item.ShowTitle)
@@ -64,14 +82,14 @@ func (l Layout) Final(src string, item source.Item) (string, error) {
 		seasonDir := fmt.Sprintf("Season %02d", item.SeasonNumber)
 		base := fmt.Sprintf("%s - s%02de%02d - %s.%s",
 			show, item.SeasonNumber, item.EpisodeNumber, title, ext)
-		return filepath.Join(l.MediaRoot, "shows", show, seasonDir, base), nil
+		return filepath.Join(l.MediaRoot, dirOr(l.ShowsDir, "shows"), show, seasonDir, base), nil
 
 	default:
 		title := sanitize(item.Title)
 		if title == "" {
 			return "", fmt.Errorf("layout: item %q has no title", item.ID)
 		}
-		return filepath.Join(l.MediaRoot, "other", title+"."+ext), nil
+		return filepath.Join(l.MediaRoot, dirOr(l.OtherDir, "other"), title+"."+ext), nil
 	}
 }
 

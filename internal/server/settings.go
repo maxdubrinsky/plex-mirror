@@ -36,6 +36,9 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		JellyfinUser:       r.FormValue("jellyfin_user"),
 		JellyfinToken:      r.FormValue("jellyfin_token"),
 		ClearJellyfinToken: r.FormValue("clear_jellyfin_token") != "",
+		MoviesDir:          r.FormValue("movies_dir"),
+		ShowsDir:           r.FormValue("shows_dir"),
+		OtherDir:           r.FormValue("other_dir"),
 		StorageHardCap:     r.FormValue("storage_hard_cap"),
 		StorageSoftCap:     r.FormValue("storage_soft_cap"),
 

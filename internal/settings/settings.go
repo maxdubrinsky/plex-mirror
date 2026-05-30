@@ -41,6 +41,9 @@ const (
 	KeyDownloadConcurrency = "download.concurrency"
 	KeyDownloadPollEvery   = "download.poll_every"
 	KeyDownloadBuffer      = "download.buffer"
+	KeyLibraryMoviesDir    = "library.movies_dir"
+	KeyLibraryShowsDir     = "library.shows_dir"
+	KeyLibraryOtherDir     = "library.other_dir"
 
 	// kdfSaltKey holds the per-store scrypt salt. The "$" prefix marks it
 	// reserved/internal: GetAll filters it out and it's never portal-editable.
@@ -388,6 +391,27 @@ func Effective(base *config.Config, vals map[string]string) (*config.Config, err
 			return nil, fmt.Errorf("settings: %s: %d exceeds max %d", KeyDownloadBuffer, n, config.MaxDownloadBuffer)
 		}
 		eff.DownloadBufferBytes = n
+	}
+
+	// Library subdirectory names. Present-and-non-empty overrides the base after
+	// validation; a present-but-empty value keeps the base (a clean "reset to
+	// default"), since an empty folder name is never valid.
+	for _, ld := range []struct {
+		key string
+		dst *string
+	}{
+		{KeyLibraryMoviesDir, &eff.MoviesDir},
+		{KeyLibraryShowsDir, &eff.ShowsDir},
+		{KeyLibraryOtherDir, &eff.OtherDir},
+	} {
+		if v, ok := vals[ld.key]; ok {
+			if t := strings.TrimSpace(v); t != "" {
+				if err := config.ValidateLibraryDir(t); err != nil {
+					return nil, fmt.Errorf("settings: %s: %w", ld.key, err)
+				}
+				*ld.dst = t
+			}
+		}
 	}
 
 	if eff.StorageHardCapBytes > 0 && eff.StorageSoftCapBytes > 0 &&

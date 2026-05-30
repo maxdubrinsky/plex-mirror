@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -21,6 +22,14 @@ type Config struct {
 	DBPath    string
 	MediaRoot string
 	LogLevel  string
+
+	// Library subdirectory names under MediaRoot, one per item kind. They let the
+	// on-disk layout match the folder names a co-located Jellyfin library expects
+	// (e.g. "tv" instead of the default "shows"). Each is a single, safe path
+	// component (see ValidateLibraryDir). Defaults: movies / shows / other.
+	MoviesDir string
+	ShowsDir  string
+	OtherDir  string
 
 	// AuthToken gates the /mcp endpoint (and, later, the portal) with a static
 	// bearer token. Empty means no app-level auth — intended for deployments
@@ -86,6 +95,19 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid PLEXMIRROR_LOG_LEVEL %q (want debug|info|warn|error)", c.LogLevel)
 	}
 
+	c.MoviesDir = strings.TrimSpace(envDefault("PLEXMIRROR_MOVIES_DIR", "movies"))
+	c.ShowsDir = strings.TrimSpace(envDefault("PLEXMIRROR_SHOWS_DIR", "shows"))
+	c.OtherDir = strings.TrimSpace(envDefault("PLEXMIRROR_OTHER_DIR", "other"))
+	for _, d := range []struct{ env, val string }{
+		{"PLEXMIRROR_MOVIES_DIR", c.MoviesDir},
+		{"PLEXMIRROR_SHOWS_DIR", c.ShowsDir},
+		{"PLEXMIRROR_OTHER_DIR", c.OtherDir},
+	} {
+		if err := ValidateLibraryDir(d.val); err != nil {
+			return nil, fmt.Errorf("%s: %w", d.env, err)
+		}
+	}
+
 	hard, err := ParseSize(envDefault("PLEXMIRROR_STORAGE_HARD_CAP", "0"))
 	if err != nil {
 		return nil, fmt.Errorf("PLEXMIRROR_STORAGE_HARD_CAP: %w", err)
@@ -136,6 +158,27 @@ func Load() (*Config, error) {
 	c.DownloadBufferBytes = buf
 
 	return c, nil
+}
+
+// ValidateLibraryDir checks that name is usable as a library subdirectory under
+// MediaRoot: a single, safe path component. It rejects empty names, anything
+// containing a path separator, the relative elements "." / "..", and any
+// dot-prefixed name (".partials" is the engine's in-flight staging dir, and a
+// leading dot also hides the folder from Jellyfin's indexer). Callers pass an
+// already-trimmed value. Exported so the portal settings overlay validates the
+// same way the env loader does.
+func ValidateLibraryDir(name string) error {
+	switch {
+	case name == "":
+		return errors.New("must not be empty")
+	case strings.ContainsAny(name, `/\`):
+		return errors.New("must be a single folder name, with no path separators")
+	case name == "." || name == "..":
+		return errors.New(`must not be "." or ".."`)
+	case strings.HasPrefix(name, "."):
+		return errors.New("must not start with a dot")
+	}
+	return nil
 }
 
 // ParseSize accepts a plain integer byte count or one of the common SI/binary

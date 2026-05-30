@@ -9,6 +9,13 @@ services:
       PLEXMIRROR_DB_PATH: "/var/lib/plex-mirror/state.db"
       PLEXMIRROR_MEDIA_ROOT: "/media"
       PLEXMIRROR_LOG_LEVEL: "info"
+      # Per-kind subfolder names created under the media root, to match the
+      # folder names your Jellyfin libraries point at. These seed the defaults;
+      # the portal Settings page can override them live (e.g. shows -> tv). A
+      # single folder name each — no slashes. Defaults: movies / shows / other.
+      PLEXMIRROR_MOVIES_DIR: "${PLEXMIRROR_MOVIES_DIR:-movies}"
+      PLEXMIRROR_SHOWS_DIR: "${PLEXMIRROR_SHOWS_DIR:-shows}"
+      PLEXMIRROR_OTHER_DIR: "${PLEXMIRROR_OTHER_DIR:-other}"
       # Shared-secret auth for the web portal (cookie) and the /mcp endpoint
       # (bearer). Leave empty to rely on Traefik forward-auth / a trusted LAN;
       # set it to require sign-in. /healthz and /static stay open either way.

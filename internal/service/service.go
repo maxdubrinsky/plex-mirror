@@ -229,6 +229,9 @@ func buildRuntime(ctx context.Context, cfg *config.Config, store *db.Store) (*ru
 
 		engine, err := download.New(store, storageMgr, download.Options{
 			MediaRoot:   cfg.MediaRoot,
+			MoviesDir:   cfg.MoviesDir,
+			ShowsDir:    cfg.ShowsDir,
+			OtherDir:    cfg.OtherDir,
 			Concurrency: cfg.DownloadConcurrency,
 			BufferSize:  int(cfg.DownloadBufferBytes),
 			Scanner:     scanner,

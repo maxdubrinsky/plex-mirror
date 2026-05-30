@@ -311,6 +311,26 @@ func TestEffectiveEmptyNumberKeepsBase(t *testing.T) {
 	}
 }
 
+func TestEffectiveLibraryDirs(t *testing.T) {
+	base := &config.Config{MoviesDir: "movies", ShowsDir: "shows", OtherDir: "other"}
+	eff, err := Effective(base, map[string]string{
+		KeyLibraryShowsDir:  "tv", // override
+		KeyLibraryMoviesDir: "",   // present-but-empty keeps the base default
+	})
+	if err != nil {
+		t.Fatalf("Effective: %v", err)
+	}
+	if eff.ShowsDir != "tv" {
+		t.Errorf("ShowsDir = %q, want tv", eff.ShowsDir)
+	}
+	if eff.MoviesDir != "movies" {
+		t.Errorf("MoviesDir = %q, want base movies kept on empty", eff.MoviesDir)
+	}
+	if eff.OtherDir != "other" {
+		t.Errorf("OtherDir = %q, want base other (not in vals)", eff.OtherDir)
+	}
+}
+
 func TestEffectiveValidation(t *testing.T) {
 	base := &config.Config{}
 	cases := []struct {
@@ -321,6 +341,7 @@ func TestEffectiveValidation(t *testing.T) {
 		{"bad concurrency", map[string]string{KeyDownloadConcurrency: "99"}},
 		{"bad size", map[string]string{KeyStorageHardCap: "lots"}},
 		{"bad duration", map[string]string{KeyDownloadPollEvery: "soon"}},
+		{"bad library dir", map[string]string{KeyLibraryShowsDir: "tv/series"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -35,6 +35,9 @@ type ConfigView struct {
 	PlexClientID        string `json:"plex_client_id"`
 	JellyfinURL         string `json:"jellyfin_url"`
 	JellyfinUser        string `json:"jellyfin_user"`
+	MoviesDir           string `json:"movies_dir"`
+	ShowsDir            string `json:"shows_dir"`
+	OtherDir            string `json:"other_dir"`
 	StorageHardCap      string `json:"storage_hard_cap"`
 	StorageSoftCap      string `json:"storage_soft_cap"`
 	DownloadConcurrency string `json:"download_concurrency"`
@@ -65,6 +68,10 @@ type ConfigUpdate struct {
 	JellyfinUser       string
 	JellyfinToken      string
 	ClearJellyfinToken bool
+
+	MoviesDir string
+	ShowsDir  string
+	OtherDir  string
 
 	StorageHardCap string
 	StorageSoftCap string
@@ -102,6 +109,9 @@ func (s *Service) ConfigView(ctx context.Context) (ConfigView, error) {
 		PlexClientID: eff.PlexClientID,
 		JellyfinURL:  eff.JellyfinURL,
 		JellyfinUser: eff.JellyfinUser,
+		MoviesDir:    eff.MoviesDir,
+		ShowsDir:     eff.ShowsDir,
+		OtherDir:     eff.OtherDir,
 
 		StorageHardCap:      capView(vals, settings.KeyStorageHardCap, eff.StorageHardCapBytes),
 		StorageSoftCap:      capView(vals, settings.KeyStorageSoftCap, eff.StorageSoftCapBytes),
@@ -182,6 +192,9 @@ func (s *Service) ApplySettings(ctx context.Context, up ConfigUpdate) error {
 		settings.KeyPlexClientID:        up.PlexClientID,
 		settings.KeyJellyfinURL:         up.JellyfinURL,
 		settings.KeyJellyfinUser:        up.JellyfinUser,
+		settings.KeyLibraryMoviesDir:    strings.TrimSpace(up.MoviesDir),
+		settings.KeyLibraryShowsDir:     strings.TrimSpace(up.ShowsDir),
+		settings.KeyLibraryOtherDir:     strings.TrimSpace(up.OtherDir),
 		settings.KeyStorageHardCap:      strings.TrimSpace(up.StorageHardCap),
 		settings.KeyStorageSoftCap:      strings.TrimSpace(up.StorageSoftCap),
 		settings.KeyDownloadConcurrency: strings.TrimSpace(up.DownloadConcurrency),

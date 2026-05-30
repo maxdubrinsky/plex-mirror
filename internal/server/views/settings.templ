@@ -42,6 +42,18 @@ templ SettingsForm(vm SettingsVM) {
 			@secretField("Token / API key", "jellyfin_token", vm.Config.JellyfinTokenSet, vm.Config.JellyfinTokenUnreadable, "")
 		</fieldset>
 		<fieldset>
+			<legend>Library layout</legend>
+			<p class="small muted">
+				Subfolder names created under the media root for each kind, so the
+				layout matches your Jellyfin libraries. A single folder name each — no
+				slashes. Changing these affects only newly downloaded items; files
+				already mirrored stay where they are.
+			</p>
+			@textField("Movies folder", "movies_dir", vm.Config.MoviesDir, "default: movies")
+			@textField("Shows folder", "shows_dir", vm.Config.ShowsDir, "default: shows — set to \"tv\" to match that Jellyfin layout")
+			@textField("Other folder", "other_dir", vm.Config.OtherDir, "default: other")
+		</fieldset>
+		<fieldset>
 			<legend>Storage</legend>
 			<label class="field">
 				<span class="field-label">Media root <span class="badge badge-muted">env-only</span></span>

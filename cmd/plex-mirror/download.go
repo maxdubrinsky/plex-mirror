@@ -91,6 +91,9 @@ func cmdDownload(args []string) int {
 
 	engine, err := download.New(store, storageMgr, download.Options{
 		MediaRoot:   cfg.MediaRoot,
+		MoviesDir:   cfg.MoviesDir,
+		ShowsDir:    cfg.ShowsDir,
+		OtherDir:    cfg.OtherDir,
 		Concurrency: cfg.DownloadConcurrency,
 		Scanner:     scanner,
 		SourceName:  "plex",
