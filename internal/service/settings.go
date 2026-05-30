@@ -43,6 +43,7 @@ type ConfigView struct {
 	DownloadConcurrency string `json:"download_concurrency"`
 	DownloadPollEvery   string `json:"download_poll_every"`
 	DownloadBuffer      string `json:"download_buffer"`
+	HealthCheckEvery    string `json:"health_check_every"`
 
 	// Secrets: whether a credential is in effect (never the value). *Unreadable
 	// distinguishes "stored but undecryptable with the current key" (rotated/
@@ -79,6 +80,7 @@ type ConfigUpdate struct {
 	DownloadConcurrency string
 	DownloadPollEvery   string
 	DownloadBuffer      string
+	HealthCheckEvery    string
 }
 
 // ConfigView returns the current effective configuration for rendering the
@@ -118,6 +120,7 @@ func (s *Service) ConfigView(ctx context.Context) (ConfigView, error) {
 		DownloadConcurrency: strconv.Itoa(eff.DownloadConcurrency),
 		DownloadPollEvery:   eff.DownloadPollEvery.String(),
 		DownloadBuffer:      bufferView(vals, eff.DownloadBufferBytes),
+		HealthCheckEvery:    eff.HealthCheckEvery.String(),
 	}
 	cv.PlexTokenSet, cv.PlexTokenUnreadable = tokenBadge(state, settings.KeyPlexToken, eff.PlexToken)
 	cv.JellyfinTokenSet, cv.JellyfinTokenUnreadable = tokenBadge(state, settings.KeyJellyfinToken, eff.JellyfinToken)
@@ -200,6 +203,7 @@ func (s *Service) ApplySettings(ctx context.Context, up ConfigUpdate) error {
 		settings.KeyDownloadConcurrency: strings.TrimSpace(up.DownloadConcurrency),
 		settings.KeyDownloadPollEvery:   strings.TrimSpace(up.DownloadPollEvery),
 		settings.KeyDownloadBuffer:      strings.TrimSpace(up.DownloadBuffer),
+		settings.KeyHealthCheckEvery:    strings.TrimSpace(up.HealthCheckEvery),
 	}
 	applySecretToSet(toSet, settings.KeyPlexToken, up.PlexToken, up.ClearPlexToken)
 	applySecretToSet(toSet, settings.KeyJellyfinToken, up.JellyfinToken, up.ClearJellyfinToken)

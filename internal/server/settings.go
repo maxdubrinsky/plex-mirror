@@ -1,8 +1,11 @@
 package server
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/maxdubrinsky/plex-mirror/internal/server/views"
 	"github.com/maxdubrinsky/plex-mirror/internal/service"
@@ -17,7 +20,32 @@ func (s *Server) handleSettingsPage(w http.ResponseWriter, r *http.Request) {
 		vm.Err = err.Error()
 	}
 	vm.Config = cv
+	vm.Health = s.svc.SourceHealth()
 	render(w, r, views.SettingsPage(s.shell(r.Context(), "Settings", "settings", "", ""), vm))
+}
+
+// handleHealthPanel serves the source-health diagnostics fragment. The panel
+// self-polls this endpoint every 5s so a recovering source / ticking retry
+// countdown stays live without a full page reload.
+func (s *Server) handleHealthPanel(w http.ResponseWriter, r *http.Request) {
+	render(w, r, views.SourceHealthPanel(s.svc.SourceHealth()))
+}
+
+// handleReconnect forces an immediate reconnect attempt for the posted source and
+// re-renders the health panel with the outcome. A failed attempt is a normal
+// result (the panel shows the error + candidate probes), so it still renders 200
+// rather than erroring. Runs on a detached context so navigating away mid-probe
+// doesn't abort a discovery that was already underway.
+func (s *Server) handleReconnect(w http.ResponseWriter, r *http.Request) {
+	src := r.FormValue("source")
+	rctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	if _, err := s.svc.ReconnectSource(rctx, src); err != nil {
+		slog.Debug("portal: reconnect attempt did not connect", "source", src, "err", err)
+	}
+	// A recovered source should refetch its libraries on the next render.
+	s.nav.clear()
+	render(w, r, views.SourceHealthPanel(s.svc.SourceHealth()))
 }
 
 // handleSettingsSave validates + persists the form and live-reloads the service.
@@ -45,6 +73,7 @@ func (s *Server) handleSettingsSave(w http.ResponseWriter, r *http.Request) {
 		DownloadConcurrency: r.FormValue("download_concurrency"),
 		DownloadPollEvery:   r.FormValue("download_poll_every"),
 		DownloadBuffer:      r.FormValue("download_buffer"),
+		HealthCheckEvery:    r.FormValue("health_check_every"),
 	}
 
 	vm := views.SettingsVM{}

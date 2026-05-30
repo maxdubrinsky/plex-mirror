@@ -550,6 +550,27 @@ td .empty::before, td.empty::before { display: none; }   /* no glyph inside tabl
 .settings .clear-secret input { width: auto; }
 .settings .actions { display: flex; align-items: center; gap: 13px; margin-top: 4px; }
 
+/* --- Source health diagnostics ------------------------------------------- */
+.settings-health { margin-top: 28px; }
+.settings-health h2 { font: 600 14px var(--font-mono); letter-spacing: .04em; margin: 0 0 4px; }
+.health-card {
+  background: var(--ink-800); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 14px 16px; margin-top: 12px;
+}
+.health-card .row.spread { align-items: center; }
+.health-card form { display: inline-flex; align-items: center; gap: 10px; margin: 0; }
+.health-err { margin: 10px 0 0; }
+.health-meta {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px 18px; margin: 12px 0 0;
+}
+.health-meta > div { display: flex; gap: 8px; align-items: baseline; }
+.health-meta dt { color: var(--muted); font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; flex: none; }
+.health-meta dd { margin: 0; word-break: break-all; }
+.health-cands { margin-top: 12px; }
+.health-cands summary { cursor: pointer; }
+.health-cands table { margin-top: 8px; font-size: 12px; }
+
 /* --- Login ---------------------------------------------------------------- */
 .login-wrap { max-width: 380px; margin: 14vh auto 0; padding: 0 20px; }
 .login-wrap .panel { padding: 28px; }

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -49,6 +50,10 @@ var (
 	// (it doesn't implement source.ChildLister).
 	ErrChildrenUnavailable = errors.New("service: source does not support listing children")
 )
+
+// plexDiscover is the Plex discovery entry point. It's a package var (defaulting
+// to plex.Discover) so tests can stub discovery without reaching real plex.tv.
+var plexDiscover = plex.Discover
 
 // runtime is the swappable bundle of everything a config change can rebuild. It
 // is treated as immutable once stored: Reload builds a fresh one and swaps the
@@ -94,6 +99,21 @@ type Service struct {
 	runCtx        context.Context    // set by Start; nil before Start (CLI/tests)
 	workersCancel context.CancelFunc // cancels the current worker generation
 	workersWG     *sync.WaitGroup    // waits out the current worker generation
+
+	// Source-health tracking + auto-reconnect (see health.go). The registry lives
+	// here, NOT in runtime, so it survives runtime swaps and keeps a source visible
+	// as "down" even when its source object failed to build. Four independent,
+	// never-nested locks (see the locking discipline note in health.go): mu (above),
+	// healthMu (the registry), reconnectMu (serializes a full reconnect), and the
+	// lock-free atomic rt pointer.
+	healthMu     sync.Mutex
+	health       map[string]sourceHealth
+	reconnectMu  sync.Mutex
+	randMu       sync.Mutex
+	healthRand   *rand.Rand
+	reconnectCh  chan string   // monitor → supervisor reconnect requests (coalesced)
+	kickCh       chan struct{} // live op → monitor "probe now" nudge (coalesced)
+	supervisorUp bool          // guards against launching the reconnect supervisor twice
 }
 
 // now returns the current runtime snapshot. Cheap (atomic load); call once at
@@ -116,9 +136,13 @@ type SourceInfo struct {
 // / the engine disabled.
 func New(cfg *config.Config, store *db.Store) (*Service, error) {
 	s := &Service{
-		baseCfg:  cfg,
-		store:    store,
-		settings: settings.NewStore(store, cfg.SecretKey),
+		baseCfg:     cfg,
+		store:       store,
+		settings:    settings.NewStore(store, cfg.SecretKey),
+		health:      map[string]sourceHealth{},
+		healthRand:  rand.New(rand.NewSource(time.Now().UnixNano())),
+		reconnectCh: make(chan string, 1),
+		kickCh:      make(chan struct{}, 1),
 	}
 
 	// If a key is now configured, encrypt any secret that was written in
@@ -150,20 +174,28 @@ func New(cfg *config.Config, store *db.Store) (*Service, error) {
 
 	bctx, bcancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer bcancel()
-	rt, err := buildRuntime(bctx, eff, store)
+	rt, disc, err := buildRuntimeWith(bctx, eff, store, nil)
 	if err != nil {
 		return nil, err
 	}
 	s.rt.Store(rt)
+	s.seedHealth(eff, rt, disc)
 	return s, nil
 }
 
-// buildRuntime wires a runtime from a (already-merged) config: a storage
+// buildRuntimeWith wires a runtime from a (already-merged) config: a storage
 // manager, whichever sources have creds, and a download engine when Plex is
 // present. Plex discovery failure is non-fatal (Plex stays disabled); absent
 // creds simply leave a source / the engine off. Returns an error only for a
 // genuine client-construction failure.
-func buildRuntime(ctx context.Context, cfg *config.Config, store *db.Store) (*runtime, error) {
+//
+// When pre != nil the caller has ALREADY resolved a Plex connection (the
+// reconnect path, which probes candidates itself) — discovery is skipped and the
+// supplied connection is installed verbatim, so the runtime that comes back
+// matches exactly what the caller proved reachable. The resolved *plex.Discovered
+// (pre, or whatever discovery produced, or nil) is returned so the caller can
+// seed the health registry with the chosen URL + candidate probes.
+func buildRuntimeWith(ctx context.Context, cfg *config.Config, store *db.Store, pre *plex.Discovered) (*runtime, *plex.Discovered, error) {
 	storageMgr := storage.NewManager(store, storage.Policy{
 		MediaRoot:    cfg.MediaRoot,
 		HardCapBytes: cfg.StorageHardCapBytes,
@@ -176,26 +208,32 @@ func buildRuntime(ctx context.Context, cfg *config.Config, store *db.Store) (*ru
 		sources: map[string]source.Source{},
 	}
 
-	// Resolve the Plex connection. An explicit PlexURL wins; otherwise, given an
-	// account token + server name, discover the connection + per-resource token
-	// from plex.tv (so a volatile *.plex.direct URL never has to be hardcoded).
-	// Discovery failure is non-fatal: browse/MCP/Jellyfin still boot and Plex
-	// simply stays disabled until the next (re)configuration.
+	// Resolve the Plex connection. A caller-supplied connection (pre) wins; then an
+	// explicit PlexURL; otherwise, given an account token + server name, discover
+	// the connection + per-resource token from plex.tv (so a volatile *.plex.direct
+	// URL never has to be hardcoded). Discovery failure is non-fatal: browse/MCP/
+	// Jellyfin still boot and Plex simply stays disabled until the next reconnect.
+	var resolved *plex.Discovered
 	plexURL, plexToken := cfg.PlexURL, cfg.PlexToken
-	if plexURL == "" && cfg.PlexServer != "" && plexToken != "" {
+	switch {
+	case pre != nil:
+		plexURL, plexToken = pre.BaseURL, pre.AccessToken
+		resolved = pre
+	case plexURL == "" && cfg.PlexServer != "" && plexToken != "":
 		dctx, cancel := context.WithTimeout(ctx, 12*time.Second)
-		disc, derr := plex.Discover(dctx, plex.DiscoverOptions{
+		disc, derr := plexDiscover(dctx, plex.DiscoverOptions{
 			Token:            plexToken,
 			Server:           cfg.PlexServer,
 			ClientIdentifier: cfg.PlexClientID,
 		})
 		cancel()
 		if derr != nil {
-			slog.Warn("service: plex discovery failed; Plex disabled until reconfigured",
+			slog.Warn("service: plex discovery failed; Plex disabled until reconnected",
 				"server", cfg.PlexServer, "err", derr)
 			plexURL, plexToken = "", ""
 		} else {
 			plexURL, plexToken = disc.BaseURL, disc.AccessToken
+			resolved = &disc
 			slog.Info("service: discovered plex server",
 				"name", disc.Name, "url", disc.BaseURL, "relay", disc.Relay)
 			if disc.Relay {
@@ -207,13 +245,13 @@ func buildRuntime(ctx context.Context, cfg *config.Config, store *db.Store) (*ru
 	if plexURL != "" && plexToken != "" {
 		plexSrc, err := plex.New(plex.Config{BaseURL: plexURL, Token: plexToken})
 		if err != nil {
-			return nil, fmt.Errorf("service: plex client: %w", err)
+			return nil, nil, fmt.Errorf("service: plex client: %w", err)
 		}
 		rt.sources[plexSrc.Name()] = plexSrc
 
 		resolver, ok := plexSrc.(source.DownloadResolver)
 		if !ok {
-			return nil, errors.New("service: plex client does not implement DownloadResolver")
+			return nil, nil, errors.New("service: plex client does not implement DownloadResolver")
 		}
 
 		var scanner download.Scanner
@@ -222,7 +260,7 @@ func buildRuntime(ctx context.Context, cfg *config.Config, store *db.Store) (*ru
 				BaseURL: cfg.JellyfinURL, Token: cfg.JellyfinToken,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("service: jellyfin scanner: %w", err)
+				return nil, nil, fmt.Errorf("service: jellyfin scanner: %w", err)
 			}
 			scanner = sc
 		}
@@ -239,7 +277,7 @@ func buildRuntime(ctx context.Context, cfg *config.Config, store *db.Store) (*ru
 			Resolver:    resolver,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("service: download engine: %w", err)
+			return nil, nil, fmt.Errorf("service: download engine: %w", err)
 		}
 		rt.engine = engine
 	}
@@ -249,7 +287,7 @@ func buildRuntime(ctx context.Context, cfg *config.Config, store *db.Store) (*ru
 			BaseURL: cfg.JellyfinURL, Token: cfg.JellyfinToken, User: cfg.JellyfinUser,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("service: jellyfin client: %w", err)
+			return nil, nil, fmt.Errorf("service: jellyfin client: %w", err)
 		}
 		rt.sources[jfSrc.Name()] = jfSrc
 	}
@@ -257,7 +295,7 @@ func buildRuntime(ctx context.Context, cfg *config.Config, store *db.Store) (*ru
 	if rt.engine == nil {
 		slog.Info("service: download engine disabled (no Plex URL/token); browse + MCP still available")
 	}
-	return rt, nil
+	return rt, resolved, nil
 }
 
 // Start launches background workers and returns immediately. They stop when ctx
@@ -269,6 +307,12 @@ func (s *Service) Start(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runCtx = ctx
+	// The reconnect supervisor owns all background-initiated Reloads. It lives for
+	// the whole runCtx lifetime and is deliberately NOT part of the per-generation
+	// worker waitgroup — otherwise the health monitor (which is in the waitgroup)
+	// requesting a reconnect would make Reload's stopWorkersLocked wait on the very
+	// goroutine running it. See startReconnectSupervisorLocked in health.go.
+	s.startReconnectSupervisorLocked(ctx)
 	// Recover any row a prior process left stranded in 'downloading' (crash
 	// mid-download). The engine's own ResetStaleDownloads also covers this when an
 	// engine starts, but doing it here makes recovery independent of whether an
@@ -300,6 +344,12 @@ func (s *Service) launchWorkersLocked(rt *runtime) {
 			rt.engine.Run(wctx, rt.cfg.DownloadPollEvery)
 		})
 	}
+	// Health monitor: probes each source's connectivity and, when Plex is
+	// unreachable, asks the supervisor to re-discover + auto-switch connections.
+	// Captures rt so it probes the connection actually in use this generation.
+	wg.Go(func() {
+		s.runHealthMonitor(wctx, rt, rt.cfg.HealthCheckEvery)
+	})
 
 	s.workersCancel = cancel
 	s.workersWG = wg
@@ -341,7 +391,16 @@ func (s *Service) resetStaleDownloads(ctx context.Context) {
 //
 // On any build/validate failure the current runtime and its workers are left
 // untouched and the error is returned.
-func (s *Service) Reload(ctx context.Context) error {
+func (s *Service) Reload(ctx context.Context) error { return s.reloadWith(ctx, nil) }
+
+// reloadWith is Reload with an optional caller-resolved Plex connection. When
+// pre != nil (the reconnect path) discovery is skipped and pre is installed
+// verbatim — so the runtime that goes live is exactly the connection the caller
+// already proved reachable, never a re-discovery that could flap or fail and drop
+// Plex entirely. After the swap it re-seeds the health registry from the new
+// effective config (pruning sources whose creds were removed, resetting a renamed
+// server's entry) and the resolved connection (chosen URL + candidate probes).
+func (s *Service) reloadWith(ctx context.Context, pre *plex.Discovered) error {
 	vals, err := s.settings.GetAll(ctx)
 	if err != nil {
 		return fmt.Errorf("reload: load settings: %w", err)
@@ -350,17 +409,19 @@ func (s *Service) Reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reload: %w", err)
 	}
-	newRT, err := buildRuntime(ctx, eff, s.store)
+	newRT, disc, err := buildRuntimeWith(ctx, eff, s.store, pre)
 	if err != nil {
 		return fmt.Errorf("reload: build runtime: %w", err)
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.stopWorkersLocked()      // stop the old generation before anything else touches state
 	s.resetStaleDownloads(ctx) // recover a download it abandoned mid-flight
 	s.rt.Store(newRT)          // publish the new runtime to readers
 	s.launchWorkersLocked(newRT)
+	s.mu.Unlock() // release before touching the registry (never nest s.mu with healthMu)
+
+	s.seedHealth(eff, newRT, disc)
 	slog.Info("service: reloaded configuration live", "sources", len(newRT.sources),
 		"downloads_enabled", newRT.engine != nil)
 	return nil
@@ -386,7 +447,9 @@ func (s *Service) ListLibraries(ctx context.Context, sourceName string) ([]sourc
 	if err != nil {
 		return nil, err
 	}
-	return src.ListLibraries(ctx)
+	libs, err := src.ListLibraries(ctx)
+	s.recordObservation(sourceName, err)
+	return libs, err
 }
 
 // ListItems lists items in a library. filter, when non-empty, is a title
@@ -401,7 +464,9 @@ func (s *Service) ListItems(ctx context.Context, sourceName, libraryID, filter s
 	if err != nil {
 		return nil, err
 	}
-	return src.ListItems(ctx, libraryID, source.ListOptions{Offset: offset, Limit: limit, Query: filter})
+	items, err := src.ListItems(ctx, libraryID, source.ListOptions{Offset: offset, Limit: limit, Query: filter})
+	s.recordObservation(sourceName, err)
+	return items, err
 }
 
 // ListChildren returns the direct children of a container item (show→seasons,
@@ -416,7 +481,9 @@ func (s *Service) ListChildren(ctx context.Context, sourceName, itemID string, l
 	if !ok {
 		return nil, ErrChildrenUnavailable
 	}
-	return lister.ListChildren(ctx, itemID, source.ListOptions{Offset: offset, Limit: limit})
+	children, err := lister.ListChildren(ctx, itemID, source.ListOptions{Offset: offset, Limit: limit})
+	s.recordObservation(sourceName, err)
+	return children, err
 }
 
 // GetItem returns metadata for a single item on a source.
@@ -425,5 +492,7 @@ func (s *Service) GetItem(ctx context.Context, sourceName, itemID string) (sourc
 	if err != nil {
 		return source.Item{}, err
 	}
-	return src.GetMetadata(ctx, itemID)
+	item, err := src.GetMetadata(ctx, itemID)
+	s.recordObservation(sourceName, err)
+	return item, err
 }

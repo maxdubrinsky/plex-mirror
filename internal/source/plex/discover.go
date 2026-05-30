@@ -45,6 +45,23 @@ type DiscoverOptions struct {
 	Probe func(ctx context.Context, baseURL string) bool
 	// ProbeTimeout bounds each connection probe; defaults to 4s.
 	ProbeTimeout time.Duration
+	// ProbeAll, when true, probes every ranked candidate (so Discovered.Candidates
+	// reports reachability for all of them) instead of stopping at the first
+	// reachable one. The diagnostics / manual-reconnect path sets this for a
+	// complete picture; the hot boot path leaves it false to stay fast.
+	ProbeAll bool
+}
+
+// ConnectionProbe is a per-candidate diagnostic record: a connection plex.tv
+// advertised for the server and whether it probed reachable. Reachable is
+// tri-state — nil means "not probed" (break-on-first-reachable skipped it), so
+// the UI can distinguish "known down" from "untested".
+type ConnectionProbe struct {
+	URI       string `json:"uri"`
+	Protocol  string `json:"protocol"`
+	Local     bool   `json:"local"`
+	Relay     bool   `json:"relay"`
+	Reachable *bool  `json:"reachable"`
 }
 
 // Discovered is the resolved connection for a server.
@@ -54,6 +71,9 @@ type Discovered struct {
 	BaseURL          string // chosen connection URI, ready for plex.New
 	AccessToken      string // per-resource token to authenticate server calls
 	Relay            bool   // true if the chosen connection routes through Plex's (throttled) relay
+	// Candidates is every connection the server advertised, best-ranked first,
+	// with each one's probe result — for the source-health diagnostics surface.
+	Candidates []ConnectionProbe
 }
 
 type resourceDTO struct {
@@ -127,14 +147,30 @@ func Discover(ctx context.Context, opts DiscoverOptions) (Discovered, error) {
 		return Discovered{}, fmt.Errorf("plex discover: server %q advertised no usable connections", res.Name)
 	}
 
+	candidates := make([]ConnectionProbe, len(conns))
+	for i, c := range conns {
+		candidates[i] = ConnectionProbe{
+			URI:      strings.TrimRight(c.URI, "/"),
+			Protocol: c.Protocol,
+			Local:    c.Local,
+			Relay:    c.Relay,
+		}
+	}
+
 	chosen := conns[0] // best-ranked fallback if nothing probes reachable
-	for _, c := range conns {
+	chosenIdx := -1
+	for i, c := range conns {
 		pctx, cancel := context.WithTimeout(ctx, probeTimeout)
 		ok := probe(pctx, c.URI)
 		cancel()
-		if ok {
-			chosen = c
-			break
+		reachable := ok
+		candidates[i].Reachable = &reachable
+		if ok && chosenIdx == -1 {
+			// conns is rank-sorted, so the first reachable is the best reachable.
+			chosen, chosenIdx = c, i
+			if !opts.ProbeAll {
+				break // hot path: stop at the first reachable, leave the rest unprobed (nil)
+			}
 		}
 	}
 
@@ -144,6 +180,7 @@ func Discover(ctx context.Context, opts DiscoverOptions) (Discovered, error) {
 		BaseURL:          strings.TrimRight(chosen.URI, "/"),
 		AccessToken:      res.AccessToken,
 		Relay:            chosen.Relay,
+		Candidates:       candidates,
 	}, nil
 }
 

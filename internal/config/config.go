@@ -65,6 +65,11 @@ type Config struct {
 	DownloadPollEvery   time.Duration // daemon poll interval for queued items, 0 = off in CLI mode
 	DownloadBufferBytes int64         // copy buffer per stream, default 1 MiB (see glb-gdl.14)
 
+	// HealthCheckEvery is how often the background monitor probes each source's
+	// connectivity and, when Plex is unreachable, re-discovers + auto-switches to
+	// a working connection. 0 disables the monitor (and thus auto-reconnect).
+	HealthCheckEvery time.Duration
+
 	// SecretKey is the passphrase used to encrypt DB-stored secrets (source
 	// tokens set via the portal settings page). Empty disables encryption and
 	// secrets are stored in plaintext in the local SQLite file. Env-only — never
@@ -147,6 +152,16 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("PLEXMIRROR_DOWNLOAD_POLL_EVERY: must be >= 0, got %q", poll)
 	}
 	c.DownloadPollEvery = poll
+
+	healthRaw := envDefault("PLEXMIRROR_HEALTH_CHECK_EVERY", "30s")
+	health, err := time.ParseDuration(healthRaw)
+	if err != nil {
+		return nil, fmt.Errorf("PLEXMIRROR_HEALTH_CHECK_EVERY: %w", err)
+	}
+	if health < 0 {
+		return nil, fmt.Errorf("PLEXMIRROR_HEALTH_CHECK_EVERY: must be >= 0, got %q", health)
+	}
+	c.HealthCheckEvery = health
 
 	buf, err := ParseSize(envDefault("PLEXMIRROR_DOWNLOAD_BUFFER", "1M"))
 	if err != nil {

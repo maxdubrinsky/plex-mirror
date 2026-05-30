@@ -58,8 +58,9 @@ transport layers**:
 - `internal/server` is the HTTP layer: `/healthz`, the cookie-auth browser portal
   (`portal.go`, returning templ fragments for HTMX swaps), and it mounts the MCP handler.
 - `internal/mcp` registers MCP tools (`list_sources`, `list_libraries`, `list_items`,
-  `get_item`, `queue_download`, `download_status`, `list_mirrored`, `storage_stats`,
-  `evict`) — each a one-line call into `Service`.
+  `get_item`, `list_children`, `queue_download`, `queue_container`, `download_status`,
+  `list_mirrored`, `storage_stats`, `evict`, `get_config`, `source_health`,
+  `reconnect_source`) — each a one-line call into `Service`.
 
 When adding a capability, implement it once on `Service`, then expose it from both faces.
 
@@ -123,8 +124,35 @@ Eviction by soft/hard byte caps. Two critical invariants:
 - Eviction ordering is **age-only for now** (`completed_at ASC`); there's a `TODO(LRU)`
   to switch to `last_accessed` once Jellyfin played-state is wired in.
 
-The sweeper (`RunSweeper`) and the download daemon (`Engine.Run`) are the two background
-workers started by `Service.Start`; a zero interval disables each.
+The sweeper (`RunSweeper`), the download daemon (`Engine.Run`), and the source-health
+monitor (`runHealthMonitor`, see below) are the background workers started by `Service.Start`;
+a zero interval disables each.
+
+### Source health + auto-reconnect (`internal/service/health.go`)
+
+Plex is a remote/shared server the operator doesn't control: its connection is resolved
+once at boot and its `plex.Client` is immutable, so a remote blip leaves it pinned to a
+dead URL. The health subsystem fixes that. A per-generation **monitor** probes each
+configured source via a bounded `ListLibraries`; on a transient Plex failure it asks the
+**reconnect supervisor** to re-discover (`plex.Discover` with `ProbeAll`, recording every
+candidate's reachability in `Discovered.Candidates`) and, **only if a candidate actually
+probes reachable**, swap in that exact connection via `reloadWith(ctx, *Discovered)` (so a
+failed re-discovery never makes Plex vanish from `list_sources`). Errors are classified
+three ways — transient `down` (backoff + reconnect), `auth_error`/`parked` (no retry storm),
+`ok`. The interval is `PLEXMIRROR_HEALTH_CHECK_EVERY` (default 30s, 0 disables; also a
+Settings field). Health is surfaced via the MCP `source_health`/`reconnect_source` tools and
+the portal Settings diagnostics panel + a browse banner.
+
+**Concurrency invariants:** the registry (`map[string]sourceHealth` on `Service`) lives
+outside `runtime` so it survives swaps and keeps a source visible as "down" even when its
+source object never built; it's re-seeded from effective config on every (re)build. Four
+never-nested locks: `s.mu` (worker lifecycle + rt swap), `healthMu` (registry), `reconnectMu`
+(serializes a reconnect; outer), and the lock-free `rt` pointer. The reconnect supervisor is a
+long-lived goroutine started in `Start` and **deliberately NOT in the worker waitgroup** —
+otherwise the in-waitgroup monitor requesting a reconnect would make `reloadWith`'s
+`stopWorkersLocked` → `wg.Wait()` wait on the goroutine running it (deadlock). Live operation
+methods call `recordObservation` so the registry tracks real traffic and nudges the monitor on
+an observed network error.
 
 ### Live runtime + hot reload
 

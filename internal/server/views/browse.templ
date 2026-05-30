@@ -3,6 +3,7 @@ package views
 import (
 	"fmt"
 
+	"github.com/maxdubrinsky/plex-mirror/internal/service"
 	"github.com/maxdubrinsky/plex-mirror/internal/source"
 )
 
@@ -12,6 +13,7 @@ import (
 // landing hint when nothing is selected yet.
 templ BrowsePage(meta PageMeta, vm BrowseVM) {
 	@Layout(meta) {
+		@healthBanner(vm.Health)
 		if vm.Source != "" && vm.Library != "" {
 			<h1>{ vm.LibraryTitle }</h1>
 			@errNotice(vm.Err)
@@ -45,6 +47,25 @@ templ BrowsePage(meta PageMeta, vm BrowseVM) {
 				</div>
 			</div>
 		}
+	}
+}
+
+// healthBanner warns, above the browse content, when the active source is offline
+// (driven by live source health, not a cached nav error). It links to the Settings
+// diagnostics panel where the candidate connections + a Reconnect button live; the
+// monitor auto-reconnects Plex in the background meanwhile.
+templ healthBanner(h *service.SourceHealthView) {
+	if h != nil {
+		<div class="notice notice-warn">
+			<b>{ healthHeadline(h) }.</b>
+			if h.LastError != "" {
+				<span class="small">{ h.LastError }</span>
+			}
+			if h.Status == "down" {
+				<span class="small">Auto-reconnecting…</span>
+			}
+			<a class="small" href="/settings#source-health">Diagnostics &amp; reconnect →</a>
+		</div>
 	}
 }
 

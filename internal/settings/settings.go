@@ -41,6 +41,7 @@ const (
 	KeyDownloadConcurrency = "download.concurrency"
 	KeyDownloadPollEvery   = "download.poll_every"
 	KeyDownloadBuffer      = "download.buffer"
+	KeyHealthCheckEvery    = "health.check_every"
 	KeyLibraryMoviesDir    = "library.movies_dir"
 	KeyLibraryShowsDir     = "library.shows_dir"
 	KeyLibraryOtherDir     = "library.other_dir"
@@ -391,6 +392,16 @@ func Effective(base *config.Config, vals map[string]string) (*config.Config, err
 			return nil, fmt.Errorf("settings: %s: %d exceeds max %d", KeyDownloadBuffer, n, config.MaxDownloadBuffer)
 		}
 		eff.DownloadBufferBytes = n
+	}
+	if v, ok := vals[KeyHealthCheckEvery]; ok && strings.TrimSpace(v) != "" {
+		d, err := time.ParseDuration(strings.TrimSpace(v))
+		if err != nil {
+			return nil, fmt.Errorf("settings: %s: %w", KeyHealthCheckEvery, err)
+		}
+		if d < 0 {
+			return nil, fmt.Errorf("settings: %s: must be >= 0, got %q", KeyHealthCheckEvery, v)
+		}
+		eff.HealthCheckEvery = d
 	}
 
 	// Library subdirectory names. Present-and-non-empty overrides the base after

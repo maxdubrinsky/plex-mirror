@@ -323,6 +323,113 @@ func RelTime(unix int64) string {
 	}
 }
 
+// --- source health diagnostics ---------------------------------------------
+
+// healthStatusClass maps a source health status to a badge CSS class, reusing the
+// mirror-status palette so the colors stay consistent.
+func healthStatusClass(status string) string {
+	switch status {
+	case "ok":
+		return "badge badge-ready"
+	case "down":
+		return "badge badge-error"
+	case "auth_error", "parked":
+		return "badge badge-queued"
+	default:
+		return "badge badge-muted"
+	}
+}
+
+// healthAgo renders how long ago t happened ("3m ago"), or "—" when unset.
+func healthAgo(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	d := time.Since(t)
+	switch {
+	case d < 0:
+		return "just now"
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}
+
+// healthUntil renders the wait until t ("in 12s"), "now" when due/past, or "—"
+// when unset — used for the auto-retry countdown.
+func healthUntil(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	d := time.Until(t)
+	if d <= 0 {
+		return "now"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("in %ds", int(d.Seconds())+1)
+	}
+	return fmt.Sprintf("in %dm", int(d.Minutes())+1)
+}
+
+// reachableLabel renders a candidate's tri-state probe result.
+func reachableLabel(reachable *bool) string {
+	switch {
+	case reachable == nil:
+		return "not probed"
+	case *reachable:
+		return "reachable"
+	default:
+		return "unreachable"
+	}
+}
+
+// reachableClass styles the candidate reachability cell.
+func reachableClass(reachable *bool) string {
+	switch {
+	case reachable == nil:
+		return "badge badge-muted"
+	case *reachable:
+		return "badge badge-ready"
+	default:
+		return "badge badge-error"
+	}
+}
+
+// healthHeadline is the short banner sentence for an unhealthy source.
+func healthHeadline(h *service.SourceHealthView) string {
+	if h == nil {
+		return ""
+	}
+	switch h.Status {
+	case "auth_error":
+		return fmt.Sprintf("%s authentication failed", h.Name)
+	case "parked":
+		return fmt.Sprintf("%s is misconfigured", h.Name)
+	default:
+		return fmt.Sprintf("%s is offline", h.Name)
+	}
+}
+
+// reconnectURL is the hx-post target for the per-source "Reconnect now" button.
+func reconnectURL() string { return "/settings/reconnect" }
+
+// candidateType labels a Plex candidate connection by how it reaches the server.
+func candidateType(c service.CandidateView) string {
+	switch {
+	case c.Relay:
+		return "relay"
+	case c.Local:
+		return "local"
+	default:
+		return "remote"
+	}
+}
+
 // itemQueueable reports whether the browse grid should offer a Queue button for
 // an item: the source must be downloadable and the item not already in the
 // mirror in a state where re-queuing is a no-op (queued/downloading/ready).

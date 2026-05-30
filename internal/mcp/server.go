@@ -225,6 +225,27 @@ func registerTools(s *server.MCPServer, svc *service.Service) {
 		}
 		return textResult(ev)
 	})
+
+	s.AddTool(mcpgo.NewTool("source_health",
+		mcpgo.WithDescription("Report connectivity health for each configured source: status (ok/down/auth_error/parked), the resolved connection URL, whether it routes through a relay, the candidate connections plex.tv advertised and which probed reachable, last success/check times, consecutive failures, and the next auto-retry time. Read-only."),
+	), func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		return textResult(svc.SourceHealth())
+	})
+
+	s.AddTool(mcpgo.NewTool("reconnect_source",
+		mcpgo.WithDescription("Force an immediate reconnect attempt for a source, bypassing the monitor's backoff. For Plex this re-discovers from plex.tv and switches to a reachable connection (direct or relay); for static-URL sources it just re-probes. Returns the refreshed source health."),
+		mcpgo.WithString("source", mcpgo.Required(), mcpgo.Description("source name from list_sources, e.g. \"plex\"")),
+	), func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		src, err := req.RequireString("source")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		view, err := svc.ReconnectSource(ctx, src)
+		if err != nil {
+			return errResult(err), nil
+		}
+		return textResult(view)
+	})
 }
 
 // textResult marshals v to indented JSON and wraps it as tool text output.

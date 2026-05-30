@@ -1,5 +1,11 @@
 package views
 
+import (
+	"fmt"
+
+	"github.com/maxdubrinsky/plex-mirror/internal/service"
+)
+
 // SettingsPage is the full settings page (glb-gdl.13): edit sources + storage +
 // download tunables from the portal instead of environment variables. Saving
 // applies live (no restart) — the form posts to itself and swaps in the updated
@@ -13,6 +19,7 @@ templ SettingsPage(meta PageMeta, vm SettingsVM) {
 			once you save, the stored settings take over.
 		</p>
 		@SettingsForm(vm)
+		@SourceHealthPanel(vm.Health)
 	}
 }
 
@@ -68,11 +75,94 @@ templ SettingsForm(vm SettingsVM) {
 			@textField("Poll interval", "download_poll_every", vm.Config.DownloadPollEvery, "e.g. 10s — how often to scan the queue")
 			@textField("Copy buffer", "download_buffer", vm.Config.DownloadBuffer, "e.g. 1M — per-stream copy buffer")
 		</fieldset>
+		<fieldset>
+			<legend>Health &amp; reconnect</legend>
+			@textField("Health check interval", "health_check_every", vm.Config.HealthCheckEvery, "e.g. 30s — how often to probe sources and auto-reconnect Plex; 0 disables")
+		</fieldset>
 		<div class="actions">
 			<button type="submit" class="btn btn-primary">Save &amp; apply</button>
 			<span class="htmx-indicator small muted">applying…</span>
 		</div>
 	</form>
+}
+
+// SourceHealthPanel is the source-connectivity diagnostics block under the form.
+// It self-polls every 5s (so a recovering source / ticking retry countdown stays
+// live without a refresh) and is the swap target for each card's "Reconnect now"
+// button. Exported because the /settings/health and /settings/reconnect handlers
+// render it standalone.
+templ SourceHealthPanel(health []service.SourceHealthView) {
+	<section id="source-health" class="settings-health" hx-get="/settings/health" hx-trigger="every 5s" hx-swap="outerHTML">
+		<h2>Source health</h2>
+		<p class="muted small">
+			Connectivity for each source. Plex is auto-reconnected when it drops (see the
+			health check interval above); use Reconnect now to retry immediately.
+		</p>
+		if len(health) == 0 {
+			<p class="muted small">No sources configured.</p>
+		} else {
+			for _, h := range health {
+				@sourceHealthCard(h)
+			}
+		}
+	</section>
+}
+
+templ sourceHealthCard(h service.SourceHealthView) {
+	<div class="health-card">
+		<div class="row spread">
+			<span class="row">
+				<b>{ h.Name }</b>
+				<span class={ healthStatusClass(h.Status) }>{ h.Status }</span>
+				if h.Relay {
+					<span class="badge badge-queued" title="Routed through Plex's bandwidth-throttled relay connection">relay</span>
+				}
+			</span>
+			<form hx-post={ reconnectURL() } hx-target="#source-health" hx-swap="outerHTML">
+				<input type="hidden" name="source" value={ h.Name }/>
+				<button type="submit" class="btn small">Reconnect now</button>
+				<span class="htmx-indicator small muted">reconnecting…</span>
+			</form>
+		</div>
+		if h.LastError != "" && h.Status != "ok" {
+			<div class="small notice notice-err health-err">{ h.LastError }</div>
+		}
+		<dl class="health-meta small">
+			if h.ChosenURL != "" {
+				<div><dt>Connection</dt><dd class="mono">{ h.ChosenURL }</dd></div>
+			}
+			<div><dt>Last success</dt><dd>{ healthAgo(h.LastSuccess) }</dd></div>
+			<div><dt>Last check</dt><dd>{ healthAgo(h.LastCheck) }</dd></div>
+			if h.ConsecutiveFailures > 0 {
+				<div><dt>Failures</dt><dd>{ fmt.Sprintf("%d", h.ConsecutiveFailures) }</dd></div>
+			}
+			if !h.NextRetryAt.IsZero() && h.Status == "down" {
+				<div><dt>Next retry</dt><dd>{ healthUntil(h.NextRetryAt) }</dd></div>
+			}
+		</dl>
+		if len(h.Candidates) > 0 {
+			<details class="health-cands">
+				<summary class="small muted">Candidate connections ({ fmt.Sprintf("%d", len(h.Candidates)) })</summary>
+				<div class="table-wrap">
+					<table class="responsive">
+						<thead>
+							<tr><th>URI</th><th style="width:70px">Proto</th><th style="width:80px">Type</th><th style="width:110px">Probe</th></tr>
+						</thead>
+						<tbody>
+							for _, c := range h.Candidates {
+								<tr>
+									<td data-label="URI" class="mono">{ c.URI }</td>
+									<td data-label="Proto">{ c.Protocol }</td>
+									<td data-label="Type">{ candidateType(c) }</td>
+									<td data-label="Probe"><span class={ reachableClass(c.Reachable) }>{ reachableLabel(c.Reachable) }</span></td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</details>
+		}
+	</div>
 }
 
 templ settingsBanner(vm SettingsVM) {

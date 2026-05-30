@@ -132,6 +132,69 @@ func TestDiscoverFallsBackToTopRankedWhenNoneReachable(t *testing.T) {
 	}
 }
 
+func TestDiscoverRecordsCandidatesBreaksOnFirstReachable(t *testing.T) {
+	direct := fakePMS(t)
+	relay := fakePMS(t)
+	js := resourcesJSON("Server", "tok",
+		conn("https", direct.URL, false, false), // rank 0, reachable → chosen, loop breaks here
+		conn("https", relay.URL, false, true),   // rank 3, never probed by default
+	)
+	tv := fakePlexTV(t, js)
+
+	got, err := discover(t, tv.URL, "Server")
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(got.Candidates) != 2 {
+		t.Fatalf("Candidates len = %d, want 2", len(got.Candidates))
+	}
+	if got.Candidates[0].URI != direct.URL || got.Candidates[0].Relay {
+		t.Errorf("candidate[0] = %+v, want remote-direct %q", got.Candidates[0], direct.URL)
+	}
+	if got.Candidates[0].Reachable == nil || !*got.Candidates[0].Reachable {
+		t.Errorf("candidate[0].Reachable = %v, want true", got.Candidates[0].Reachable)
+	}
+	// Break-on-first-reachable leaves the lower-ranked candidate unprobed (tri-state nil).
+	if got.Candidates[1].Reachable != nil {
+		t.Errorf("candidate[1].Reachable = %v, want nil (not probed)", *got.Candidates[1].Reachable)
+	}
+}
+
+func TestDiscoverProbeAllMarksEveryCandidate(t *testing.T) {
+	direct := fakePMS(t)
+	relay := fakePMS(t)
+	js := resourcesJSON("Server", "tok",
+		conn("https", direct.URL, false, false),           // rank 0, reachable
+		conn("https", "http://127.0.0.1:1", false, false), // rank 0, unreachable
+		conn("https", relay.URL, false, true),             // rank 3, reachable
+	)
+	tv := fakePlexTV(t, js)
+
+	got, err := Discover(context.Background(), DiscoverOptions{
+		Token:        acctToken,
+		Server:       "Server",
+		PlexTVURL:    tv.URL,
+		HTTPClient:   &http.Client{Timeout: 3 * time.Second},
+		ProbeTimeout: time.Second,
+		ProbeAll:     true,
+	})
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(got.Candidates) != 3 {
+		t.Fatalf("Candidates len = %d, want 3", len(got.Candidates))
+	}
+	for i, c := range got.Candidates {
+		if c.Reachable == nil {
+			t.Errorf("candidate[%d] (%s) Reachable = nil, want every candidate probed with ProbeAll", i, c.URI)
+		}
+	}
+	// The best-ranked *reachable* connection wins — remote-direct, not the relay.
+	if got.BaseURL != direct.URL || got.Relay {
+		t.Errorf("BaseURL=%q relay=%v, want remote-direct %q", got.BaseURL, got.Relay, direct.URL)
+	}
+}
+
 func TestDiscoverServerNotFoundListsAvailable(t *testing.T) {
 	js := resourcesJSON("Real Server", "tok", conn("https", "http://x", false, false))
 	tv := fakePlexTV(t, js)

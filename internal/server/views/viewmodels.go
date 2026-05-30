@@ -57,6 +57,10 @@ type BrowseVM struct {
 	HasMore      bool   // a full page came back, so a Next page may exist
 	View         string // "card" | "table" — results rendering mode
 	Err          string
+	// Health is the active source's health when it isn't ok, so the page can show a
+	// "source offline — auto-reconnecting" banner with a link to the diagnostics.
+	// nil when the source is healthy (or none is selected).
+	Health *service.SourceHealthView
 }
 
 func (vm BrowseVM) status(itemID string) string { return vm.Statuses[itemID] }
@@ -221,4 +225,7 @@ type SettingsVM struct {
 	SavedNotLive bool
 	Warn         string
 	Err          string
+	// Health is each configured source's connectivity diagnostics, rendered in the
+	// source-health panel below the form (and refreshed by the reconnect button).
+	Health []service.SourceHealthView
 }

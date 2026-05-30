@@ -48,6 +48,8 @@ func (s *Server) portalMux() http.Handler {
 	m.HandleFunc("GET /storage", s.handleStoragePage)
 	m.HandleFunc("GET /settings", s.handleSettingsPage)
 	m.HandleFunc("POST /settings", s.handleSettingsSave)
+	m.HandleFunc("GET /settings/health", s.handleHealthPanel)
+	m.HandleFunc("POST /settings/reconnect", s.handleReconnect)
 	return m
 }
 
@@ -75,11 +77,21 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	}
 	if vm.Source != "" {
 		vm.Downloadable = downloadableFor(vm.Sources, vm.Source)
+		// Surface the real connectivity state as a banner (with the actual error +
+		// a link to the diagnostics/reconnect panel) rather than the old generic
+		// "unavailable" string. Driven by live source health, not the nav cache.
+		if h, ok := s.svc.SourceHealthFor(vm.Source); ok && !sourceHealthy(h.Status) {
+			vm.Health = &h
+		}
 		// Reuse the (cached) sidebar fetch for the active source's libraries so we
 		// don't double round-trip — shell() reads the same cache below.
 		libs, errMsg := s.navLibraries(ctx, vm.Source)
 		if errMsg != "" {
-			vm.Err = "This source is currently unavailable."
+			// Only fall back to a generic inline error when the health banner isn't
+			// already explaining the outage.
+			if vm.Health == nil {
+				vm.Err = "This source is currently unavailable."
+			}
 		} else if vm.Library != "" {
 			vm.LibraryTitle = libraryTitle(libs, vm.Library)
 			s.loadItems(ctx, &vm)
@@ -548,7 +560,6 @@ type navCache struct {
 
 type navCacheEntry struct {
 	libs    []source.Library
-	errMsg  string
 	fetched time.Time
 }
 
@@ -564,29 +575,58 @@ func (c *navCache) clear() {
 // portal. The error is cached too, so a down source isn't retried (and re-hung)
 // on every page render for the TTL window.
 func (s *Server) navLibraries(ctx context.Context, srcName string) (libs []source.Library, errMsg string) {
+	// A source the monitor already knows is unhealthy: surface a terse rail note
+	// from live health instead of hanging on a ListLibraries that will just time
+	// out — and would re-hang every render. The full detail + a Reconnect button
+	// live on the Settings diagnostics panel.
+	if h, ok := s.svc.SourceHealthFor(srcName); ok && !sourceHealthy(h.Status) {
+		return nil, railNote(h.Status)
+	}
+
 	s.nav.mu.Lock()
 	if e, ok := s.nav.entries[srcName]; ok && time.Since(e.fetched) < navCacheTTL {
 		s.nav.mu.Unlock()
-		return e.libs, e.errMsg
+		return e.libs, ""
 	}
 	s.nav.mu.Unlock()
 
 	fctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	e := navCacheEntry{fetched: time.Now()}
-	if got, err := s.svc.ListLibraries(fctx, srcName); err != nil {
-		e.errMsg = "unavailable"
-	} else {
-		e.libs = got
+	got, err := s.svc.ListLibraries(fctx, srcName)
+	if err != nil {
+		// ListLibraries records the failure into source health, so the next render
+		// takes the early-return branch above. We deliberately do NOT cache the
+		// error: once a reconnect succeeds, the very next render refetches.
+		return nil, "unavailable"
 	}
 
 	s.nav.mu.Lock()
 	if s.nav.entries == nil {
 		s.nav.entries = map[string]navCacheEntry{}
 	}
-	s.nav.entries[srcName] = e
+	s.nav.entries[srcName] = navCacheEntry{libs: got, fetched: time.Now()}
 	s.nav.mu.Unlock()
-	return e.libs, e.errMsg
+	return got, ""
+}
+
+// sourceHealthy reports whether a source-health status needs no banner/rail note.
+func sourceHealthy(status string) bool {
+	return status == "ok" || status == "unknown" || status == ""
+}
+
+// railNote is the short sidebar note for a down source (kept terse to fit the
+// rail; full detail lives on the Settings diagnostics panel).
+func railNote(status string) string {
+	switch status {
+	case "auth_error":
+		return "auth error"
+	case "parked":
+		return "misconfigured"
+	case "down":
+		return "offline — reconnecting"
+	default:
+		return "unavailable"
+	}
 }
 
 // resolveView picks the browse results render mode: an explicit ?view (which is

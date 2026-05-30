@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,9 +146,13 @@ func buildService(t *testing.T) *Service {
 // wire stub sources directly. runCtx stays nil so no background workers start.
 func newWithRuntime(store *db.Store, rt *runtime) *Service {
 	s := &Service{
-		baseCfg:  rt.cfg,
-		store:    store,
-		settings: settings.NewStore(store, rt.cfg.SecretKey),
+		baseCfg:     rt.cfg,
+		store:       store,
+		settings:    settings.NewStore(store, rt.cfg.SecretKey),
+		health:      map[string]sourceHealth{},
+		healthRand:  rand.New(rand.NewSource(1)),
+		reconnectCh: make(chan string, 1),
+		kickCh:      make(chan struct{}, 1),
 	}
 	s.rt.Store(rt)
 	return s
