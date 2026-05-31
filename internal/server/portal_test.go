@@ -85,6 +85,11 @@ func TestStaticServedWithoutAuth(t *testing.T) {
 		"/static/app.css",
 		"/static/htmx.min.js",
 		"/static/fonts/ibm-plex-mono-latin-400.woff2",
+		// Favicons / PWA assets must load on the (unauthenticated) login page too.
+		"/static/icons/favicon.svg",
+		"/static/icons/favicon-180.png",
+		"/static/site.webmanifest",
+		"/favicon.ico",
 	} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))

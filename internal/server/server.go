@@ -41,6 +41,7 @@ func (s *Server) Routes() http.Handler {
 		// reachable while unauthenticated, and the embedded assets back both it
 		// and every authed page.
 		mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
+		mux.Handle("GET /favicon.ico", faviconHandler())
 		mux.HandleFunc("GET /login", s.handleLoginGet)
 		mux.HandleFunc("POST /login", s.handleLoginPost)
 		mux.HandleFunc("GET /logout", s.handleLogout)
