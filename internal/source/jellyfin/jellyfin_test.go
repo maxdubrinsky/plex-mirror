@@ -123,6 +123,8 @@ func TestListItemsPopulatesPlayed(t *testing.T) {
 		switch r.URL.Path {
 		case "/Users/Me":
 			writeJSON(w, usersMeBody)
+		case "/UserViews":
+			writeJSON(w, `{"Items":[{"Id":"lib-1","Name":"Movies","CollectionType":"movies"}],"TotalRecordCount":1}`)
 		case "/Items":
 			capturedQuery = r.URL.Query()
 			w.Header().Set("Content-Type", "application/json")
@@ -164,6 +166,11 @@ func TestListItemsPopulatesPlayed(t *testing.T) {
 	if got := capturedQuery.Get("enableUserData"); got != "true" {
 		t.Errorf("enableUserData = %q, want true", got)
 	}
+	// lib-1 is a movies library, so the listing is constrained to top-level
+	// Movie entries rather than a recursive flatten of the whole tree.
+	if got := capturedQuery.Get("includeItemTypes"); got != "Movie" {
+		t.Errorf("includeItemTypes = %q, want Movie", got)
+	}
 
 	// i-1: played
 	if items[0].Played == nil || *items[0].Played != true {
@@ -199,6 +206,8 @@ func TestListItemsPushesSearchTerm(t *testing.T) {
 		switch r.URL.Path {
 		case "/Users/Me":
 			writeJSON(w, usersMeBody)
+		case "/UserViews":
+			writeJSON(w, `{"Items":[{"Id":"lib-2","Name":"Shows","CollectionType":"tvshows"}],"TotalRecordCount":1}`)
 		case "/Items":
 			gotSearch = r.URL.Query().Get("searchTerm")
 			writeJSON(w, `{"Items":[],"TotalRecordCount":0}`)
@@ -207,11 +216,131 @@ func TestListItemsPushesSearchTerm(t *testing.T) {
 		}
 	})
 
-	if _, err := src.ListItems(context.Background(), "lib-1", source.ListOptions{Query: "the crown"}); err != nil {
+	if _, err := src.ListItems(context.Background(), "lib-2", source.ListOptions{Query: "the crown"}); err != nil {
 		t.Fatalf("ListItems: %v", err)
 	}
 	if gotSearch != "the crown" {
 		t.Errorf("searchTerm = %q, want %q", gotSearch, "the crown")
+	}
+}
+
+// TestListItemsConstrainsToTopLevelType is the regression guard for the grouping
+// bug: a library listing must be narrowed to the library's root item type, so a
+// TV library returns just its series — not series+seasons+episodes flattened —
+// matching how the Plex view groups things. Mixed/unknown libraries stay
+// unconstrained (a flat recursive scan) because they have no single root type.
+func TestListItemsConstrainsToTopLevelType(t *testing.T) {
+	cases := []struct {
+		name           string
+		collectionType string // "" => CollectionType omitted (unknown library)
+		wantType       string // "" => no includeItemTypes constraint expected
+	}{
+		{"tv shows -> series", "tvshows", "Series"},
+		{"movies -> movie", "movies", "Movie"},
+		{"music -> artist", "music", "MusicArtist"},
+		{"home videos -> unconstrained", "homevideos", ""},
+		{"unknown -> unconstrained", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			views := `{"Items":[{"Id":"lib-x","Name":"L"`
+			if tc.collectionType != "" {
+				views += `,"CollectionType":"` + tc.collectionType + `"`
+			}
+			views += `}],"TotalRecordCount":1}`
+
+			var captured url.Values
+			src, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/Users/Me":
+					writeJSON(w, usersMeBody)
+				case "/UserViews":
+					writeJSON(w, views)
+				case "/Items":
+					captured = r.URL.Query()
+					writeJSON(w, `{"Items":[],"TotalRecordCount":0}`)
+				default:
+					t.Errorf("unexpected request: %s", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			})
+
+			if _, err := src.ListItems(context.Background(), "lib-x", source.ListOptions{}); err != nil {
+				t.Fatalf("ListItems: %v", err)
+			}
+			if got := captured.Get("includeItemTypes"); got != tc.wantType {
+				t.Errorf("includeItemTypes = %q, want %q", got, tc.wantType)
+			}
+			// Whatever the kind, the scan stays recursive so titles nested in
+			// sub-folders still surface.
+			if got := captured.Get("recursive"); got != "true" {
+				t.Errorf("recursive = %q, want true", got)
+			}
+		})
+	}
+}
+
+// TestListItemsCachesLibraryKind verifies the view→kind map is fetched once and
+// reused, so paging through a library doesn't re-hit GetUserViews per page.
+func TestListItemsCachesLibraryKind(t *testing.T) {
+	var userViewsCalls int
+	src, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Users/Me":
+			writeJSON(w, usersMeBody)
+		case "/UserViews":
+			userViewsCalls++
+			writeJSON(w, `{"Items":[{"Id":"lib-2","Name":"Shows","CollectionType":"tvshows"}],"TotalRecordCount":1}`)
+		case "/Items":
+			if got := r.URL.Query().Get("includeItemTypes"); got != "Series" {
+				t.Errorf("includeItemTypes = %q, want Series", got)
+			}
+			writeJSON(w, `{"Items":[],"TotalRecordCount":0}`)
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	})
+
+	for page := range 3 {
+		if _, err := src.ListItems(context.Background(), "lib-2", source.ListOptions{Offset: page * 50, Limit: 50}); err != nil {
+			t.Fatalf("ListItems page %d: %v", page, err)
+		}
+	}
+	if userViewsCalls != 1 {
+		t.Errorf("GetUserViews called %d times across 3 pages, want 1 (kind is cached)", userViewsCalls)
+	}
+}
+
+// TestListItemsDegradesWhenViewsFail confirms a failing GetUserViews doesn't
+// break browsing: the listing falls back to an unconstrained recursive scan
+// (its prior behavior) rather than erroring on the kind lookup.
+func TestListItemsDegradesWhenViewsFail(t *testing.T) {
+	var captured url.Values
+	src, _ := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Users/Me":
+			writeJSON(w, usersMeBody)
+		case "/UserViews":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/Items":
+			captured = r.URL.Query()
+			writeJSON(w, `{"Items":[{"Id":"i-1","Name":"A","Type":"Movie"}],"TotalRecordCount":1}`)
+		default:
+			t.Errorf("unexpected request: %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	})
+
+	items, err := src.ListItems(context.Background(), "lib-1", source.ListOptions{})
+	if err != nil {
+		t.Fatalf("ListItems must not fail when only GetUserViews errors: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("got %d items, want 1", len(items))
+	}
+	if got := captured.Get("includeItemTypes"); got != "" {
+		t.Errorf("includeItemTypes = %q, want empty (degraded to unconstrained)", got)
 	}
 }
 
@@ -498,6 +627,8 @@ func TestErrorDetailSurfacesRawBody(t *testing.T) {
 		switch r.URL.Path {
 		case "/Users/Me":
 			writeJSON(w, usersMeBody)
+		case "/UserViews":
+			writeJSON(w, `{"Items":[{"Id":"lib-1","Name":"Movies","CollectionType":"movies"}],"TotalRecordCount":1}`)
 		case "/Items":
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)

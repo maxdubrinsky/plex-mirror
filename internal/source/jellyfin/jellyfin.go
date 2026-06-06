@@ -41,6 +41,14 @@ type jellyfinSource struct {
 	userOnce sync.Once
 	userID   string
 	userErr  error
+
+	// kindCache maps libraryID -> kind, learned from GetUserViews. ListItems
+	// uses it to constrain a library listing to its top-level item type (Series
+	// for TV, Movie for movies) so a recursive scan returns just the shows, not
+	// shows+seasons+episodes flattened. Populated lazily on the first miss and
+	// reused thereafter; a library added later simply misses and reloads.
+	kindMu    sync.Mutex
+	kindCache map[string]source.LibraryKind
 }
 
 // New builds a Jellyfin browse adapter. It validates inputs but does not yet
@@ -189,15 +197,21 @@ func (s *jellyfinSource) ListItems(ctx context.Context, libraryID string, opts s
 		return nil, err
 	}
 
-	// Recursive=true so that callers asking for a movie/show/music library get
-	// the leaf items (movies, series, tracks) instead of just the immediate
-	// folder children. EnableUserData is required for the Played field to be
-	// populated.
+	// Recursive=true so titles nested in sub-folders still surface, but constrain
+	// to the library's top-level item type (Series for TV, Movie for movies,
+	// MusicArtist for music) — otherwise Jellyfin flattens the whole tree and a
+	// TV library comes back as series+seasons+episodes intermixed. This mirrors
+	// Plex's /library/sections/<id>/all, which yields only the section's roots;
+	// callers drill in via ListChildren. EnableUserData populates Played.
 	req := s.client.ItemsAPI.GetItems(ctx).
 		UserId(userID).
 		ParentId(libraryID).
 		Recursive(true).
 		EnableUserData(true)
+
+	if types := topLevelItemTypes(s.libraryKind(ctx, userID, libraryID)); len(types) > 0 {
+		req = req.IncludeItemTypes(types)
+	}
 
 	if opts.Offset > 0 {
 		req = req.StartIndex(int32(opts.Offset))
@@ -226,9 +240,61 @@ func (s *jellyfinSource) ListItems(ctx context.Context, libraryID string, opts s
 	return items, nil
 }
 
+// libraryKind resolves a library's kind from its id, consulting GetUserViews on
+// the first miss and caching the whole view→kind map. A lookup failure (or a
+// library absent from the views, e.g. a child id passed in error) degrades to
+// LibraryOther so ListItems falls back to its old unconstrained behavior rather
+// than erroring — any real auth/network fault re-surfaces on the GetItems call
+// that follows.
+func (s *jellyfinSource) libraryKind(ctx context.Context, userID, libraryID string) source.LibraryKind {
+	s.kindMu.Lock()
+	if k, ok := s.kindCache[libraryID]; ok {
+		s.kindMu.Unlock()
+		return k
+	}
+	s.kindMu.Unlock()
+
+	result, _, err := s.client.UserViewsAPI.GetUserViews(ctx).UserId(userID).Execute()
+	if err != nil || result == nil {
+		return source.LibraryOther
+	}
+
+	s.kindMu.Lock()
+	if s.kindCache == nil {
+		s.kindCache = make(map[string]source.LibraryKind)
+	}
+	for _, it := range result.Items {
+		s.kindCache[derefString(it.Id)] = collectionKind(it.CollectionType)
+	}
+	k, ok := s.kindCache[libraryID]
+	s.kindMu.Unlock()
+	if !ok {
+		return source.LibraryOther
+	}
+	return k
+}
+
+// topLevelItemTypes maps a library kind to the Jellyfin item type(s) that sit at
+// the top of that library's hierarchy. Returning nil means "no constraint" — the
+// listing stays a flat recursive scan, which is the right default for mixed /
+// home-video / unknown libraries that have no single root type.
+func topLevelItemTypes(kind source.LibraryKind) []jfapi.BaseItemKind {
+	switch kind {
+	case source.LibraryMovies:
+		return []jfapi.BaseItemKind{jfapi.BASEITEMKIND_MOVIE}
+	case source.LibraryShows:
+		return []jfapi.BaseItemKind{jfapi.BASEITEMKIND_SERIES}
+	case source.LibraryMusic:
+		return []jfapi.BaseItemKind{jfapi.BASEITEMKIND_MUSIC_ARTIST}
+	default:
+		return nil
+	}
+}
+
 // ListChildren implements source.ChildLister: the direct children of an item
 // (show → seasons, season → episodes). Recursive=false so only the immediate
-// level comes back, unlike ListItems which flattens a whole library.
+// level comes back — this is how the caller drills into a library root that
+// ListItems returned.
 func (s *jellyfinSource) ListChildren(ctx context.Context, itemID string, opts source.ListOptions) ([]source.Item, error) {
 	if strings.TrimSpace(itemID) == "" {
 		return nil, fmt.Errorf("jellyfin: itemID is required")
