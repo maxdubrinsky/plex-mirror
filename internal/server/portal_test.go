@@ -216,6 +216,29 @@ func TestQueueContainerRoutesWired(t *testing.T) {
 	}
 }
 
+// The bulk-evict routes mirror the bulk-queue ones: wired and degrading to an
+// inline "not configured" fragment (not a 404/500) when no source is configured.
+func TestEvictContainerRoutesWired(t *testing.T) {
+	h, _, _ := newTestServer(t, "")
+	cases := []struct {
+		method, path string
+	}{
+		{http.MethodPost, "/evict/container?source=plex&item=sh"},
+		{http.MethodGet, "/evict/container/confirm?source=plex&item=sh"},
+	}
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s %s: status = %d, want 200 (inline error fragment); body=%s",
+				c.method, c.path, rec.Code, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), "not configured") {
+			t.Errorf("%s %s: expected 'not configured' error, got:\n%s", c.method, c.path, rec.Body.String())
+		}
+	}
+}
+
 func TestEvictUnknownIDShowsError(t *testing.T) {
 	h, _, _ := newTestServer(t, "")
 	rec := httptest.NewRecorder()

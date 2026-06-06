@@ -226,6 +226,26 @@ func registerTools(s *server.MCPServer, svc *service.Service) {
 		return textResult(ev)
 	})
 
+	s.AddTool(mcpgo.NewTool("evict_container",
+		mcpgo.WithDescription("Evict every mirrored episode beneath a container — a season (its episodes) or a show (all seasons → episodes) — deleting the local files and freeing the space. Idempotent: leaves not mirrored locally are skipped. Returns counts (evicted/skipped/failed) + freed bytes. Identify the container by the source it was mirrored from (e.g. \"plex\")."),
+		mcpgo.WithString("source", mcpgo.Required(), mcpgo.Description("the source the mirror was downloaded from (e.g. \"plex\")")),
+		mcpgo.WithString("item_id", mcpgo.Required(), mcpgo.Description("the container's item id on that source (a show or season id); a single episode id also works")),
+	), func(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+		src, err := req.RequireString("source")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		itemID, err := req.RequireString("item_id")
+		if err != nil {
+			return mcpgo.NewToolResultError(err.Error()), nil
+		}
+		res, err := svc.EvictContainer(ctx, src, itemID)
+		if err != nil {
+			return errResult(err), nil
+		}
+		return textResult(res)
+	})
+
 	s.AddTool(mcpgo.NewTool("source_health",
 		mcpgo.WithDescription("Report connectivity health for each configured source: status (ok/down/auth_error/parked), the resolved connection URL, whether it routes through a relay, the candidate connections plex.tv advertised and which probed reachable, last success/check times, consecutive failures, and the next auto-retry time. Read-only."),
 	), func(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {

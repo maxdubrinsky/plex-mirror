@@ -45,6 +45,8 @@ func (s *Server) portalMux() http.Handler {
 	m.HandleFunc("GET /queue/count", s.handleQueueCount)
 	m.HandleFunc("POST /cancel", s.handleCancel)
 	m.HandleFunc("POST /evict", s.handleEvict)
+	m.HandleFunc("POST /evict/container", s.handleEvictContainer)
+	m.HandleFunc("GET /evict/container/confirm", s.handleEvictContainerConfirm)
 	m.HandleFunc("GET /storage", s.handleStoragePage)
 	m.HandleFunc("GET /settings", s.handleSettingsPage)
 	m.HandleFunc("POST /settings", s.handleSettingsSave)
@@ -309,6 +311,40 @@ func (s *Server) handleQueueContainerConfirm(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	render(w, r, views.QueueConfirm(prev))
+}
+
+// handleEvictContainer evicts every mirrored episode under a season/show and
+// re-renders the children panel with a result banner — the destructive mirror of
+// handleQueueContainer.
+func (s *Server) handleEvictContainer(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	srcName := r.FormValue("source")
+	itemID := r.FormValue("item")
+	res, err := s.svc.EvictContainer(ctx, srcName, itemID)
+	if err != nil {
+		render(w, r, views.InlineError(err.Error()))
+		return
+	}
+	vm, verr := s.buildItemVM(ctx, srcName, itemID)
+	if verr != nil {
+		render(w, r, views.InlineError(verr.Error()))
+		return
+	}
+	vm.EvictBulk = &res
+	render(w, r, views.ChildrenPanel(vm))
+}
+
+// handleEvictContainerConfirm returns the container-level confirm dialog (episode
+// count + freed size) before a bulk evict runs.
+func (s *Server) handleEvictContainerConfirm(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	q := r.URL.Query()
+	prev, err := s.svc.PreviewEvict(ctx, q.Get("source"), q.Get("item"))
+	if err != nil {
+		render(w, r, views.InlineError(err.Error()))
+		return
+	}
+	render(w, r, views.EvictConfirm(prev))
 }
 
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {

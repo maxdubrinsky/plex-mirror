@@ -69,9 +69,15 @@ templ ChildrenPanel(vm ItemDetailVM) {
 		if vm.Bulk != nil {
 			@bulkBanner(vm.Bulk)
 		}
+		if vm.EvictBulk != nil {
+			@evictBanner(vm.EvictBulk)
+		}
 		<div class="row spread">
 			<h2 style="margin:0">{ vm.childrenHeading() }</h2>
-			@bulkQueueControl(vm)
+			<div class="row">
+				@bulkQueueControl(vm)
+				@bulkEvictControl(vm)
+			</div>
 		</div>
 		<div id="bulk-confirm-zone"></div>
 		if len(vm.Children) == 0 {
@@ -120,6 +126,37 @@ templ seasonQueueButton(vm ItemDetailVM) {
 	>Queue season</button>
 }
 
+// bulkEvictControl is the destructive mirror of bulkQueueControl: "Evict season"
+// (direct, with a browser confirm built from the loaded episodes) or "Evict show"
+// (a server-rendered confirm with episode count + freed size, since the show page
+// hasn't loaded the per-season episodes yet).
+templ bulkEvictControl(vm ItemDetailVM) {
+	if vm.bulkEvictable() {
+		switch vm.Item.Kind {
+			case source.ItemSeason:
+				@seasonEvictButton(vm)
+			case source.ItemShow:
+				<button
+					class="btn btn-danger"
+					hx-get={ evictContainerConfirmURL(vm.Source, vm.Item.ID) }
+					hx-target="#bulk-confirm-zone"
+					hx-swap="innerHTML"
+				>Evict show</button>
+		}
+	}
+}
+
+templ seasonEvictButton(vm ItemDetailVM) {
+	{{ count, bytes := vm.evictableChildren() }}
+	<button
+		class="btn btn-danger"
+		hx-post={ evictContainerURL(vm.Source, vm.Item.ID) }
+		hx-target="#children-panel"
+		hx-swap="outerHTML"
+		hx-confirm={ seasonEvictConfirm(count, bytes) }
+	>Evict season</button>
+}
+
 // bulkBanner reports the outcome of a bulk queue at the top of the panel.
 templ bulkBanner(r *service.BulkQueueResult) {
 	<div class="notice bulk-banner">
@@ -129,6 +166,19 @@ templ bulkBanner(r *service.BulkQueueResult) {
 		}
 		if r.Failed > 0 {
 			<span class="badge badge-error" title={ bulkErrorTitle(r) }>{ fmt.Sprintf("%d failed", r.Failed) }</span>
+		}
+	</div>
+}
+
+// evictBanner reports the outcome of a bulk evict at the top of the panel.
+templ evictBanner(r *service.BulkEvictResult) {
+	<div class="notice bulk-banner">
+		<span>Evicted <b>{ fmt.Sprintf("%d", r.Evicted) }</b> · freed { HumanBytes(r.FreedBytes) }</span>
+		if r.Skipped > 0 {
+			<span class="muted">· { fmt.Sprintf("%d not mirrored", r.Skipped) }</span>
+		}
+		if r.Failed > 0 {
+			<span class="badge badge-error" title={ evictBulkErrorTitle(r) }>{ fmt.Sprintf("%d failed", r.Failed) }</span>
 		}
 	</div>
 }
@@ -154,6 +204,31 @@ templ QueueConfirm(p service.ContainerPreview) {
 			</p>
 			<div class="row">
 				<button class="btn btn-primary" hx-post={ queueContainerURL(p.Source, p.ItemID) } hx-target="#children-panel" hx-swap="outerHTML">Queue everything</button>
+				<button class="btn" hx-get={ childrenURL(p.Source, p.ItemID) } hx-target="#children-panel" hx-swap="outerHTML">Cancel</button>
+			</div>
+		}
+	</div>
+}
+
+// EvictConfirm is the container-level confirm dialog (count + freed size + season
+// span) returned by GET /evict/container/confirm into #bulk-confirm-zone.
+// Confirming posts to /evict/container, which swaps the whole panel (clearing
+// this dialog).
+templ EvictConfirm(p service.EvictPreview) {
+	<div class="confirm">
+		if p.ToEvict == 0 {
+			<p class="muted">Nothing to evict — none of this { p.Kind }'s episodes are mirrored locally.</p>
+			<button class="btn small" hx-get={ childrenURL(p.Source, p.ItemID) } hx-target="#children-panel" hx-swap="outerHTML">Close</button>
+		} else {
+			<p>
+				Evict <b>{ fmt.Sprintf("%d", p.ToEvict) }</b> mirrored episode(s)
+				if p.Seasons > 1 {
+					across <b>{ fmt.Sprintf("%d", p.Seasons) }</b> seasons
+				}
+				and free <b>{ HumanBytes(p.FreedBytes) }</b>? The local files will be deleted.
+			</p>
+			<div class="row">
+				<button class="btn btn-danger" hx-post={ evictContainerURL(p.Source, p.ItemID) } hx-target="#children-panel" hx-swap="outerHTML">Evict everything</button>
 				<button class="btn" hx-get={ childrenURL(p.Source, p.ItemID) } hx-target="#children-panel" hx-swap="outerHTML">Cancel</button>
 			</div>
 		}

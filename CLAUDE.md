@@ -59,8 +59,8 @@ transport layers**:
   (`portal.go`, returning templ fragments for HTMX swaps), and it mounts the MCP handler.
 - `internal/mcp` registers MCP tools (`list_sources`, `list_libraries`, `list_items`,
   `get_item`, `list_children`, `queue_download`, `queue_container`, `download_status`,
-  `list_mirrored`, `storage_stats`, `evict`, `get_config`, `source_health`,
-  `reconnect_source`) — each a one-line call into `Service`.
+  `list_mirrored`, `storage_stats`, `evict`, `evict_container`, `get_config`,
+  `source_health`, `reconnect_source`) — each a one-line call into `Service`.
 
 When adding a capability, implement it once on `Service`, then expose it from both faces.
 

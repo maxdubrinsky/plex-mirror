@@ -84,8 +84,8 @@ func TestToolsListRegistersAllTools(t *testing.T) {
 		"list_sources": true, "list_libraries": true, "list_items": true,
 		"get_item": true, "list_children": true, "queue_download": true,
 		"queue_container": true, "download_status": true, "list_mirrored": true,
-		"storage_stats": true, "evict": true, "get_config": true,
-		"source_health": true, "reconnect_source": true,
+		"storage_stats": true, "evict": true, "evict_container": true,
+		"get_config": true, "source_health": true, "reconnect_source": true,
 	}
 	got := map[string]bool{}
 	for _, tool := range out.Result.Tools {

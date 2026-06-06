@@ -197,3 +197,70 @@ func TestQueueConfirmNothingToQueue(t *testing.T) {
 		t.Errorf("should not offer Queue everything when nothing to queue:\n%s", html)
 	}
 }
+
+func TestChildrenPanelRendersEvictControls(t *testing.T) {
+	season := ItemDetailVM{
+		Source: "plex", Downloadable: true,
+		Item: source.Item{ID: "s1", Title: "Season 1", Kind: source.ItemSeason},
+	}
+	if html := renderComponent(t, ChildrenPanel(season)); !strings.Contains(html, "Evict season") {
+		t.Errorf("season panel missing Evict season control:\n%s", html)
+	}
+	show := ItemDetailVM{
+		Source: "plex", Downloadable: true,
+		Item: source.Item{ID: "sh", Title: "Show", Kind: source.ItemShow},
+	}
+	if html := renderComponent(t, ChildrenPanel(show)); !strings.Contains(html, "Evict show") {
+		t.Errorf("show panel missing Evict show control:\n%s", html)
+	}
+}
+
+func TestChildrenPanelNotDownloadableHasNoEvictButton(t *testing.T) {
+	vm := ItemDetailVM{
+		Source: "jellyfin", Downloadable: false,
+		Item: source.Item{ID: "s1", Title: "Season 1", Kind: source.ItemSeason},
+	}
+	html := renderComponent(t, ChildrenPanel(vm))
+	if strings.Contains(html, "Evict season") || strings.Contains(html, "Evict show") {
+		t.Errorf("non-downloadable source should not offer a bulk evict button:\n%s", html)
+	}
+}
+
+func TestEvictBannerRendersCounts(t *testing.T) {
+	vm := ItemDetailVM{
+		Source: "plex", Downloadable: true,
+		Item:      source.Item{ID: "s1", Title: "Season 1", Kind: source.ItemSeason},
+		EvictBulk: &service.BulkEvictResult{Evicted: 2, Skipped: 1, FreedBytes: 2048},
+	}
+	html := renderComponent(t, ChildrenPanel(vm))
+	if !strings.Contains(html, "Evicted <b>2</b>") {
+		t.Errorf("banner missing evicted count:\n%s", html)
+	}
+	if !strings.Contains(html, "not mirrored") {
+		t.Errorf("banner missing skipped note:\n%s", html)
+	}
+}
+
+func TestEvictConfirmRendersCountAndSize(t *testing.T) {
+	p := service.EvictPreview{
+		Container: "Show", Source: "plex", ItemID: "sh", Kind: "show",
+		ToEvict: 10, Seasons: 3, FreedBytes: 50 << 30,
+	}
+	html := renderComponent(t, EvictConfirm(p))
+	for _, want := range []string{"<b>10</b>", "<b>3</b>", "50.0 GB", "Evict everything"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("confirm missing %q:\n%s", want, html)
+		}
+	}
+}
+
+func TestEvictConfirmNothingToEvict(t *testing.T) {
+	p := service.EvictPreview{Container: "Show", Source: "plex", ItemID: "sh", Kind: "show", ToEvict: 0}
+	html := renderComponent(t, EvictConfirm(p))
+	if !strings.Contains(html, "Nothing to evict") {
+		t.Errorf("expected 'Nothing to evict' message:\n%s", html)
+	}
+	if strings.Contains(html, "Evict everything") {
+		t.Errorf("should not offer Evict everything when nothing to evict:\n%s", html)
+	}
+}

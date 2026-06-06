@@ -124,6 +124,27 @@ func seasonQueueConfirm(count int, bytes int64) string {
 	return fmt.Sprintf("Queue %d episode(s) (%s) to the local mirror?", count, HumanBytes(bytes))
 }
 
+// evictContainerURL / evictContainerConfirmURL are the destructive mirror of the
+// queue-container targets: the hx-post that evicts every mirrored episode under a
+// season/show, and the hx-get that returns the count/freed-size confirm first.
+func evictContainerURL(source, id string) string {
+	q := url.Values{"source": {source}, "item": {id}}
+	return "/evict/container?" + q.Encode()
+}
+
+func evictContainerConfirmURL(source, id string) string {
+	q := url.Values{"source": {source}, "item": {id}}
+	return "/evict/container/confirm?" + q.Encode()
+}
+
+// seasonEvictConfirm is the browser confirm() text for the season bulk evict.
+func seasonEvictConfirm(count int, bytes int64) string {
+	if count <= 0 {
+		return "None of this season's episodes are mirrored — nothing to evict."
+	}
+	return fmt.Sprintf("Evict %d mirrored episode(s) (%s)? The local files will be deleted.", count, HumanBytes(bytes))
+}
+
 // childrenURL re-fetches the item's children panel as a fragment (used to close
 // the show confirm dialog and to refresh per-episode badges).
 func childrenURL(source, id string) string {
@@ -136,6 +157,15 @@ func childrenURL(source, id string) string {
 func bulkErrorTitle(r *service.BulkQueueResult) string {
 	if r == nil || len(r.Errors) == 0 {
 		return "some items could not be queued"
+	}
+	return strings.Join(r.Errors, "\n")
+}
+
+// evictBulkErrorTitle joins the per-leaf failure messages into a tooltip for the
+// "N failed" badge on the evict result banner.
+func evictBulkErrorTitle(r *service.BulkEvictResult) string {
+	if r == nil || len(r.Errors) == 0 {
+		return "some items could not be evicted"
 	}
 	return strings.Join(r.Errors, "\n")
 }

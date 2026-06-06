@@ -94,7 +94,10 @@ type ItemDetailVM struct {
 	// Bulk is set after a "Queue season"/"Queue show" action so the children
 	// panel can render a result banner (glb-gdl.11/.12). nil on first paint.
 	Bulk *service.BulkQueueResult
-	Err  string
+	// EvictBulk is the destructive counterpart, set after an "Evict season/show"
+	// action. nil on first paint and after a queue action.
+	EvictBulk *service.BulkEvictResult
+	Err       string
 }
 
 // bulkQueueable reports whether to offer a bulk "Queue season/show" control:
@@ -118,6 +121,31 @@ func (vm ItemDetailVM) queueableChildren() (count int, bytes int64) {
 		}
 		count++
 		bytes += c.SizeBytes
+	}
+	return count, bytes
+}
+
+// bulkEvictable reports whether to offer a bulk "Evict season/show" control. It
+// reuses Downloadable as the gate: mirror rows only exist for the source they
+// were downloaded from, so the control belongs in the same (downloadable) browse
+// view as Queue and never appears on a browse-only source where it'd no-op.
+func (vm ItemDetailVM) bulkEvictable() bool {
+	return vm.Downloadable &&
+		(vm.Item.Kind == source.ItemShow || vm.Item.Kind == source.ItemSeason)
+}
+
+// evictableChildren counts the children that are mirrored locally (ready) with
+// their total size — used for the season evict confirm text (the season page
+// already has its episodes + statuses loaded, so no round-trip needed).
+func (vm ItemDetailVM) evictableChildren() (count int, bytes int64) {
+	for _, c := range vm.Children {
+		if c.Container == "" {
+			continue
+		}
+		if vm.childStatus(c.ID) == "ready" {
+			count++
+			bytes += c.SizeBytes
+		}
 	}
 	return count, bytes
 }

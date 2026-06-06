@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -215,5 +217,181 @@ func TestQueueContainerNonDownloadableSource(t *testing.T) {
 	}
 	if _, err := svc.QueueContainer(ctx, "browseonly", "x"); !errors.Is(err, source.ErrUnsupported) {
 		t.Errorf("err = %v, want source.ErrUnsupported", err)
+	}
+}
+
+// mirrorReady records an episode as a ready local mirror (file on disk + DB row),
+// so the bulk-evict tests have something to remove.
+func mirrorReady(t *testing.T, svc *Service, key string, season int, size int64) string {
+	t.Helper()
+	root := svc.now().cfg.MediaRoot
+	rel := fmt.Sprintf("shows/Show/Season %02d/%s.mkv", season, key)
+	path := mustFile(t, root, rel, size)
+	if _, err := svc.now().storage.RecordReady(context.Background(), storage.ReadyItem{
+		Source: "plex", SourceKey: key, Title: "Show", Container: "mkv",
+		LocalPath: path, SizeBytes: size,
+	}); err != nil {
+		t.Fatalf("RecordReady %s: %v", key, err)
+	}
+	return path
+}
+
+// readyKeys returns the source_keys of every row currently in 'ready' state, so a
+// test can assert exactly which mirrors survived an eviction.
+func readyKeys(t *testing.T, svc *Service) map[string]bool {
+	t.Helper()
+	mirrored, err := svc.ListMirrored(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ListMirrored: %v", err)
+	}
+	out := map[string]bool{}
+	for _, m := range mirrored {
+		out[m.SourceKey] = true
+	}
+	return out
+}
+
+func TestEvictContainerSeason(t *testing.T) {
+	svc := buildBulkService(t)
+	ctx := context.Background()
+
+	// Mirror both season-1 episodes and the unrelated season-2 episode.
+	p1 := mirrorReady(t, svc, "e1", 1, 1000)
+	mirrorReady(t, svc, "e2", 1, 1000)
+	mirrorReady(t, svc, "e3", 2, 1000)
+
+	res, err := svc.EvictContainer(ctx, "plex", "s1")
+	if err != nil {
+		t.Fatalf("EvictContainer season: %v", err)
+	}
+	if res.Evicted != 2 || res.Skipped != 0 || res.Failed != 0 {
+		t.Fatalf("season result = %+v, want evicted=2 skipped=0 failed=0", res)
+	}
+	if res.FreedBytes != 2000 {
+		t.Errorf("FreedBytes = %d, want 2000", res.FreedBytes)
+	}
+	// The season-1 files are gone; season 2 is untouched.
+	if _, err := os.Stat(p1); !os.IsNotExist(err) {
+		t.Errorf("e1 file still present after eviction (stat err = %v)", err)
+	}
+	survivors := readyKeys(t, svc)
+	if survivors["e1"] || survivors["e2"] {
+		t.Errorf("season-1 episodes still ready: %v", survivors)
+	}
+	if !survivors["e3"] {
+		t.Errorf("season-2 episode should be untouched, ready set = %v", survivors)
+	}
+
+	// Idempotent: a second pass finds nothing left to evict.
+	res2, err := svc.EvictContainer(ctx, "plex", "s1")
+	if err != nil {
+		t.Fatalf("EvictContainer re-run: %v", err)
+	}
+	if res2.Evicted != 0 || res2.Skipped != 2 {
+		t.Fatalf("re-run result = %+v, want evicted=0 skipped=2", res2)
+	}
+}
+
+func TestEvictContainerShowDescendsSeasons(t *testing.T) {
+	svc := buildBulkService(t)
+	ctx := context.Background()
+
+	mirrorReady(t, svc, "e1", 1, 1000)
+	mirrorReady(t, svc, "e2", 1, 1000)
+	mirrorReady(t, svc, "e3", 2, 1000)
+
+	res, err := svc.EvictContainer(ctx, "plex", "sh")
+	if err != nil {
+		t.Fatalf("EvictContainer show: %v", err)
+	}
+	if res.Evicted != 3 || res.Failed != 0 {
+		t.Fatalf("show result = %+v, want evicted=3 (all episodes across both seasons)", res)
+	}
+	if res.Container != "Show" {
+		t.Errorf("Container = %q, want Show", res.Container)
+	}
+	if res.FreedBytes != 3000 {
+		t.Errorf("FreedBytes = %d, want 3000", res.FreedBytes)
+	}
+	if len(readyKeys(t, svc)) != 0 {
+		t.Errorf("expected no ready mirrors left, got %v", readyKeys(t, svc))
+	}
+}
+
+func TestEvictContainerSingleEpisode(t *testing.T) {
+	svc := buildBulkService(t)
+	ctx := context.Background()
+	mirrorReady(t, svc, "e1", 1, 1000)
+	mirrorReady(t, svc, "e2", 1, 1000)
+
+	// Pointing EvictContainer at a leaf evicts just that one (gatherLeaves returns
+	// the root itself when it carries a file).
+	res, err := svc.EvictContainer(ctx, "plex", "e1")
+	if err != nil {
+		t.Fatalf("EvictContainer episode: %v", err)
+	}
+	if res.Evicted != 1 {
+		t.Fatalf("episode result = %+v, want evicted=1", res)
+	}
+	if survivors := readyKeys(t, svc); survivors["e1"] || !survivors["e2"] {
+		t.Errorf("ready set = %v, want only e2", survivors)
+	}
+}
+
+func TestEvictContainerSkipsUnmirrored(t *testing.T) {
+	svc := buildBulkService(t)
+	ctx := context.Background()
+
+	// Nothing mirrored: every leaf is skipped, nothing fails.
+	res, err := svc.EvictContainer(ctx, "plex", "sh")
+	if err != nil {
+		t.Fatalf("EvictContainer: %v", err)
+	}
+	if res.Evicted != 0 || res.Failed != 0 || res.Skipped != 3 {
+		t.Fatalf("result = %+v, want evicted=0 failed=0 skipped=3", res)
+	}
+}
+
+func TestPreviewEvictCountsAndSeasons(t *testing.T) {
+	svc := buildBulkService(t)
+	ctx := context.Background()
+
+	// Mirror one of the two seasons fully + one episode of the other.
+	mirrorReady(t, svc, "e1", 1, 1000)
+	mirrorReady(t, svc, "e3", 2, 1000)
+
+	prev, err := svc.PreviewEvict(ctx, "plex", "sh")
+	if err != nil {
+		t.Fatalf("PreviewEvict: %v", err)
+	}
+	if prev.ToEvict != 2 {
+		t.Fatalf("preview = %+v, want toEvict=2 (e1+e3)", prev)
+	}
+	if prev.FreedBytes != 2000 {
+		t.Errorf("FreedBytes = %d, want 2000", prev.FreedBytes)
+	}
+	if prev.Seasons != 2 {
+		t.Errorf("Seasons = %d, want 2 (e1 in s1, e3 in s2)", prev.Seasons)
+	}
+	if prev.Kind != "show" {
+		t.Errorf("Kind = %q, want show", prev.Kind)
+	}
+}
+
+func TestEvictContainerErrors(t *testing.T) {
+	svc := buildBulkService(t)
+	ctx := context.Background()
+
+	// Unknown source.
+	if _, err := svc.EvictContainer(ctx, "nope", "sh"); !errors.Is(err, ErrSourceNotFound) {
+		t.Errorf("unknown source err = %v, want ErrSourceNotFound", err)
+	}
+	// A browse-only source that can't traverse a hierarchy → ErrChildrenUnavailable
+	// (note: unlike queue, evict does NOT require a downloadable source).
+	svc.now().sources["browseonly"] = &browseSource{name: "browseonly", meta: map[string]source.Item{
+		"sh": {ID: "sh", Title: "Show", Kind: source.ItemShow},
+	}}
+	if _, err := svc.EvictContainer(ctx, "browseonly", "sh"); !errors.Is(err, ErrChildrenUnavailable) {
+		t.Errorf("browse-only err = %v, want ErrChildrenUnavailable", err)
 	}
 }

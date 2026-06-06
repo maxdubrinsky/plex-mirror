@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/maxdubrinsky/plex-mirror/internal/source"
+	"github.com/maxdubrinsky/plex-mirror/internal/storage"
 )
 
 // maxChildDepth bounds the container descent (show → season → episode is depth
@@ -39,6 +41,32 @@ type ContainerPreview struct {
 	AlreadyHave int    `json:"already_have"` // ready/downloading leaves
 	Seasons     int    `json:"seasons"`      // distinct season containers spanned
 	TotalBytes  int64  `json:"total_bytes"`  // size of the to-queue leaves
+}
+
+// BulkEvictResult summarizes a "evict this whole container" operation: every
+// mirrored leaf beneath a show/season (or a single leaf) is removed and its
+// space freed. Idempotent like its queue counterpart: leaves with no ready local
+// copy are counted Skipped and left untouched.
+type BulkEvictResult struct {
+	Container  string   `json:"container"`        // title of the container evicted
+	Evicted    int      `json:"evicted"`          // leaves whose local file was removed
+	Skipped    int      `json:"skipped"`          // not mirrored locally (nothing to free)
+	Failed     int      `json:"failed"`           // couldn't evict (e.g. path-escape guard)
+	FreedBytes int64    `json:"freed_bytes"`      // sum of sizes of the evicted leaves
+	Errors     []string `json:"errors,omitempty"` // one message per failed leaf
+}
+
+// EvictPreview is the dry-run count behind the "Evict show" confirm: how many
+// mirrored leaves would be removed, the space that frees, and how many seasons
+// they span.
+type EvictPreview struct {
+	Container  string `json:"container"`
+	Source     string `json:"source"`
+	ItemID     string `json:"item_id"`
+	Kind       string `json:"kind"`
+	ToEvict    int    `json:"to_evict"`    // ready leaves that would be removed
+	FreedBytes int64  `json:"freed_bytes"` // space their removal frees
+	Seasons    int    `json:"seasons"`     // distinct season containers spanned
 }
 
 // QueueContainer enqueues every downloadable leaf beneath a container item,
@@ -118,6 +146,113 @@ func (s *Service) PreviewContainer(ctx context.Context, sourceName, itemID strin
 	}
 	prev.Seasons = len(seasons)
 	return prev, nil
+}
+
+// EvictContainer evicts every mirrored leaf beneath a container item, descending
+// show → season → episode as needed (or evicts a single leaf when itemID is one).
+// It deletes each ready local copy and frees the space. Idempotent: leaves with
+// no ready local copy are Skipped. Unlike QueueContainer it does NOT require a
+// downloadable source — eviction acts on local rows — but it does need the source
+// to traverse its hierarchy, so it returns ErrChildrenUnavailable for a source
+// that can't (and the usual ErrSourceNotFound / ErrItemNotFound).
+func (s *Service) EvictContainer(ctx context.Context, sourceName, itemID string) (BulkEvictResult, error) {
+	rt := s.now()
+	src, err := rt.source(sourceName)
+	if err != nil {
+		return BulkEvictResult{}, err
+	}
+	leaves, root, err := s.gatherLeaves(ctx, src, itemID)
+	if err != nil {
+		return BulkEvictResult{}, err
+	}
+	ready, err := s.readyRowsForSource(ctx, sourceName)
+	if err != nil {
+		return BulkEvictResult{}, err
+	}
+
+	res := BulkEvictResult{Container: root.Title}
+	for _, leaf := range leaves {
+		row, ok := ready[leaf.ID]
+		if !ok {
+			res.Skipped++
+			continue
+		}
+		ev, eerr := rt.storage.EvictItem(ctx, row.id)
+		switch {
+		case errors.Is(eerr, storage.ErrItemNotFound):
+			// Raced with another evictor / the sweeper; treat as already gone.
+			res.Skipped++
+		case eerr != nil:
+			res.Failed++
+			res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", leafLabel(leaf), eerr))
+		default:
+			res.Evicted++
+			res.FreedBytes += ev.SizeBytes
+		}
+	}
+	return res, nil
+}
+
+// PreviewEvict counts the mirrored leaves under a container without removing
+// anything, for the confirm dialog. Same error contract as EvictContainer.
+func (s *Service) PreviewEvict(ctx context.Context, sourceName, itemID string) (EvictPreview, error) {
+	src, err := s.now().source(sourceName)
+	if err != nil {
+		return EvictPreview{}, err
+	}
+	leaves, root, err := s.gatherLeaves(ctx, src, itemID)
+	if err != nil {
+		return EvictPreview{}, err
+	}
+	ready, err := s.readyRowsForSource(ctx, sourceName)
+	if err != nil {
+		return EvictPreview{}, err
+	}
+
+	prev := EvictPreview{Container: root.Title, Source: sourceName, ItemID: itemID, Kind: string(root.Kind)}
+	seasons := map[string]struct{}{}
+	for _, leaf := range leaves {
+		row, ok := ready[leaf.ID]
+		if !ok {
+			continue
+		}
+		prev.ToEvict++
+		prev.FreedBytes += row.size
+		if leaf.ParentID != "" {
+			seasons[leaf.ParentID] = struct{}{}
+		}
+	}
+	prev.Seasons = len(seasons)
+	return prev, nil
+}
+
+// readyRow is the slice of an items row a bulk evict needs: where to evict (id)
+// and how much it frees (size).
+type readyRow struct {
+	id   int64
+	size int64
+}
+
+// readyRowsForSource maps source_key → ready row for one source, so a bulk evict
+// resolves each leaf's local id and freed space in a single query (the mirror
+// stores no show/season linkage, so the leaf set must come from the source).
+func (s *Service) readyRowsForSource(ctx context.Context, sourceName string) (map[string]readyRow, error) {
+	rows, err := s.store.QueryContext(ctx,
+		`SELECT source_key, id, COALESCE(size_bytes, 0) FROM items WHERE source = ? AND status = 'ready'`, sourceName)
+	if err != nil {
+		return nil, fmt.Errorf("ready rows for %q: %w", sourceName, err)
+	}
+	defer rows.Close()
+	out := map[string]readyRow{}
+	for rows.Next() {
+		var key string
+		var r readyRow
+		if err := rows.Scan(&key, &r.id, &r.size); err != nil {
+			return nil, fmt.Errorf("scan ready row: %w", err)
+		}
+		out[key] = r
+	}
+	return out, rows.Err()
 }
 
 // downloadableSource resolves a source that the engine can actually pull from.
